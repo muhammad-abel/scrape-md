@@ -8,6 +8,9 @@ Sebuah API web crawling agent yang menggunakan **Crawl4AI** untuk mengambil kont
 - ✅ Konversi otomatis ke format Markdown yang bersih
 - ✅ Support untuk single URL atau batch crawling
 - ✅ Async/concurrent processing untuk performa optimal
+- ✅ **Content filtering** - Opsi untuk mengambil hanya konten utama tanpa navbar, footer, sidebar
+- ✅ **Custom exclusion** - Exclude HTML tags tertentu sesuai kebutuhan
+- ✅ **CSS Selector** - Target specific element dengan CSS selector
 - ✅ Error handling untuk URL tidak valid atau halaman yang tidak dapat diakses
 - ✅ Opsi untuk menyimpan hasil ke file `.md`
 - ✅ Metadata lengkap (title, status code, timestamp)
@@ -57,7 +60,7 @@ Crawl satu atau beberapa URL dan return hasil dalam format Markdown
 
 ## 🔧 Penggunaan
 
-### Example 1: Single URL
+### Example 1: Basic - Single URL
 
 ```bash
 curl -X POST "http://localhost:8000/crawl" \
@@ -80,13 +83,72 @@ curl -X POST "http://localhost:8000/crawl" \
   }'
 ```
 
-### Example 3: Dengan menyimpan ke file
+### Example 3: Content Only Mode (🔥 NEW!)
+
+Ambil hanya konten utama tanpa navbar, footer, sidebar, dll. **Ideal untuk RAG/embedding!**
 
 ```bash
 curl -X POST "http://localhost:8000/crawl" \
   -H "Content-Type: application/json" \
   -d '{
     "urls": ["https://example.com"],
+    "content_only": true
+  }'
+```
+
+**Tags yang otomatis di-exclude saat `content_only: true`:**
+- `nav` - Navigation menu
+- `footer` - Footer
+- `header` - Header
+- `aside` - Sidebar
+- `script`, `style`, `noscript` - Scripts & styles
+- `iframe` - iFrames
+- `button`, `input`, `select`, `textarea` - Form elements
+- `figure` - Figures (biasanya ads)
+
+### Example 4: Custom Excluded Tags
+
+Exclude tags tertentu sesuai kebutuhan:
+
+```bash
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com"],
+    "excluded_tags": ["nav", "footer", "aside"]
+  }'
+```
+
+### Example 5: CSS Selector - Target Specific Element
+
+Ambil hanya element tertentu menggunakan CSS selector:
+
+```bash
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com"],
+    "css_selector": "article.main-content"
+  }'
+```
+
+**Contoh CSS selectors:**
+- `"article"` - Semua tag `<article>`
+- `"#main-content"` - Element dengan ID `main-content`
+- `".post-content"` - Element dengan class `post-content`
+- `"div.container > article"` - Article dalam container
+
+### Example 6: Kombinasi + Save to File
+
+Gabungkan semua opsi untuk hasil maksimal:
+
+```bash
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com"],
+    "content_only": true,
+    "excluded_tags": ["figure", "img"],
     "save_to_file": true,
     "output_dir": "output_markdown"
   }'
@@ -96,11 +158,19 @@ curl -X POST "http://localhost:8000/crawl" \
 
 ```json
 {
-  "urls": ["string"],           // Required: List URL yang akan di-crawl
-  "save_to_file": false,        // Optional: Simpan hasil ke file .md
-  "output_dir": "output_markdown" // Optional: Direktori output
+  "urls": ["string"],                    // Required: List URL yang akan di-crawl
+  "save_to_file": false,                 // Optional: Simpan hasil ke file .md
+  "output_dir": "output_markdown",       // Optional: Direktori output
+  "content_only": false,                 // Optional: Ambil hanya konten utama
+  "excluded_tags": ["nav", "footer"],    // Optional: Custom tags yang di-exclude
+  "css_selector": "article"              // Optional: CSS selector untuk target element
 }
 ```
+
+**Parameter Priority:**
+- `css_selector` (highest) - Jika ada, hanya ambil element yang match
+- `excluded_tags` - Custom tags ditambahkan ke daftar exclusion
+- `content_only` - Preset exclusion untuk konten bersih
 
 ### Response Schema
 
@@ -114,7 +184,10 @@ curl -X POST "http://localhost:8000/crawl" \
         "title": "string",
         "status_code": 200,
         "fetched_at": "2025-11-12T13:55:00Z",
-        "success": true
+        "success": true,
+        "url": "string",
+        "excluded_tags": ["form", "nav", "footer"],
+        "css_selector": null
       },
       "status": "success",
       "file_path": "output_markdown/example_com.md"
@@ -168,12 +241,35 @@ scrape-md/
 └── output_markdown/    # Folder untuk hasil crawling (auto-created)
 ```
 
-## ⚙️ Konfigurasi Crawl4AI
+## ⚙️ Content Filtering Options
 
-Agent ini menggunakan konfigurasi berikut:
+### 1. Content Only Mode
+Set `content_only: true` untuk mengaktifkan preset clean content:
+```json
+{"urls": ["..."], "content_only": true}
+```
+Otomatis exclude: nav, footer, header, aside, script, style, iframe, button, input, select, textarea, figure
+
+### 2. Custom Excluded Tags
+Specify tags tertentu yang mau di-exclude:
+```json
+{"urls": ["..."], "excluded_tags": ["nav", "footer", "aside"]}
+```
+
+### 3. CSS Selector
+Target element tertentu dengan CSS selector:
+```json
+{"urls": ["..."], "css_selector": "article.main-content"}
+```
+
+### Kombinasi
+Semua opsi bisa digabung dengan priority: `css_selector` > `excluded_tags` > `content_only`
+
+## ⚙️ Default Crawl4AI Configuration
+
 - `word_count_threshold=10` - Minimum jumlah kata
-- `excluded_tags=['form', 'nav']` - Tag HTML yang diabaikan
-- `remove_overlay_elements=True` - Hapus elemen overlay
+- `excluded_tags=[...]` - Tag HTML yang diabaikan (dynamic based on options)
+- `remove_overlay_elements=True` - Hapus elemen overlay/popup
 
 ## 🔒 Error Handling
 

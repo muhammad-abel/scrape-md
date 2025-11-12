@@ -24,6 +24,11 @@ class CrawlRequest(BaseModel):
     save_to_file: Optional[bool] = False
     output_dir: Optional[str] = "output_markdown"
 
+    # Content filtering options
+    content_only: Optional[bool] = False
+    excluded_tags: Optional[List[str]] = None
+    css_selector: Optional[str] = None
+
     @validator('urls')
     def validate_urls(cls, v):
         if not v:
@@ -71,6 +76,49 @@ def sanitize_filename(url: str) -> str:
         name = name[:200]
     return f"{name}.md"
 
+def build_excluded_tags(content_only: bool = False, custom_tags: Optional[List[str]] = None) -> List[str]:
+    """
+    Build list of HTML tags yang akan di-exclude dari crawling
+
+    Parameters:
+    - content_only: Jika True, gunakan preset tags untuk clean content
+    - custom_tags: Additional tags yang mau di-exclude
+
+    Returns:
+    - List of tags yang akan di-exclude
+    """
+    # Base tags yang selalu di-exclude
+    base_tags = ['form']
+
+    # Preset untuk content_only mode - exclude elemen navigasi dan UI
+    clean_content_tags = [
+        'nav',           # Navigation menu
+        'footer',        # Footer
+        'header',        # Header
+        'aside',         # Sidebar
+        'script',        # JavaScript
+        'style',         # CSS inline
+        'noscript',      # NoScript tags
+        'iframe',        # iFrames
+        'button',        # Buttons
+        'input',         # Input fields
+        'select',        # Select dropdowns
+        'textarea',      # Text areas
+        'figure',        # Figures (sering untuk ads)
+    ]
+
+    excluded = base_tags.copy()
+
+    if content_only:
+        excluded.extend(clean_content_tags)
+
+    # Tambah custom tags jika ada
+    if custom_tags:
+        excluded.extend(custom_tags)
+
+    # Remove duplicates
+    return list(set(excluded))
+
 async def save_markdown_to_file(content: str, url: str, output_dir: str) -> str:
     """
     Menyimpan konten Markdown ke file
@@ -88,18 +136,45 @@ async def save_markdown_to_file(content: str, url: str, output_dir: str) -> str:
 
     return filepath
 
-async def crawl_single_url(url: str, crawler: AsyncWebCrawler, save_file: bool = False, output_dir: str = "output_markdown") -> CrawlResult:
+async def crawl_single_url(
+    url: str,
+    crawler: AsyncWebCrawler,
+    save_file: bool = False,
+    output_dir: str = "output_markdown",
+    content_only: bool = False,
+    excluded_tags: Optional[List[str]] = None,
+    css_selector: Optional[str] = None
+) -> CrawlResult:
     """
     Crawl satu URL dan return hasilnya
+
+    Parameters:
+    - url: URL yang akan di-crawl
+    - crawler: AsyncWebCrawler instance
+    - save_file: Simpan hasil ke file
+    - output_dir: Direktori output
+    - content_only: Jika True, hanya ambil konten utama (exclude navbar, footer, dll)
+    - excluded_tags: Custom list HTML tags yang akan di-exclude
+    - css_selector: CSS selector untuk target specific element
     """
     try:
+        # Build excluded tags list
+        tags_to_exclude = build_excluded_tags(content_only, excluded_tags)
+
+        # Prepare crawl parameters
+        crawl_params = {
+            "url": url,
+            "word_count_threshold": 10,
+            "excluded_tags": tags_to_exclude,
+            "remove_overlay_elements": True,
+        }
+
+        # Add CSS selector jika ada (highest priority)
+        if css_selector:
+            crawl_params["css_selector"] = css_selector
+
         # Jalankan crawling
-        result = await crawler.arun(
-            url=url,
-            word_count_threshold=10,
-            excluded_tags=['form', 'nav'],
-            remove_overlay_elements=True,
-        )
+        result = await crawler.arun(**crawl_params)
 
         # Extract markdown dari result
         markdown_content = result.markdown if hasattr(result, 'markdown') else result.markdown_v2.raw_markdown
@@ -110,7 +185,9 @@ async def crawl_single_url(url: str, crawler: AsyncWebCrawler, save_file: bool =
             "status_code": getattr(result, 'status_code', 200),
             "fetched_at": datetime.utcnow().isoformat() + "Z",
             "success": result.success,
-            "url": url
+            "url": url,
+            "excluded_tags": tags_to_exclude,
+            "css_selector": css_selector
         }
 
         # Simpan ke file jika diminta
@@ -174,22 +251,34 @@ async def crawl_urls(request: CrawlRequest):
     - urls: List URL yang akan di-crawl
     - save_to_file: (Optional) Simpan hasil ke file .md
     - output_dir: (Optional) Direktori untuk menyimpan file (default: output_markdown)
+    - content_only: (Optional) Jika True, hanya ambil konten utama tanpa navbar, footer, dll (default: False)
+    - excluded_tags: (Optional) Custom list HTML tags yang akan di-exclude
+    - css_selector: (Optional) CSS selector untuk target specific element (contoh: "article", "#main-content")
 
     Returns:
     - results: List hasil crawling untuk setiap URL
     - total_urls: Total URL yang diproses
     - successful: Jumlah URL yang berhasil
     - failed: Jumlah URL yang gagal
+
+    Examples:
+    - Basic crawl: {"urls": ["https://example.com"]}
+    - Clean content only: {"urls": ["https://example.com"], "content_only": true}
+    - Custom exclusion: {"urls": ["https://example.com"], "excluded_tags": ["nav", "footer"]}
+    - Target specific element: {"urls": ["https://example.com"], "css_selector": "article.main"}
     """
     # Initialize crawler
     async with AsyncWebCrawler(verbose=False) as crawler:
         # Jalankan crawling untuk semua URL secara concurrent
         tasks = [
             crawl_single_url(
-                url,
-                crawler,
-                request.save_to_file,
-                request.output_dir
+                url=url,
+                crawler=crawler,
+                save_file=request.save_to_file,
+                output_dir=request.output_dir,
+                content_only=request.content_only,
+                excluded_tags=request.excluded_tags,
+                css_selector=request.css_selector
             )
             for url in request.urls
         ]
