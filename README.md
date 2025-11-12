@@ -80,12 +80,15 @@ ANTHROPIC_API_KEY=your_key_here
 OPENAI_API_KEY=your_key_here
 # atau
 GEMINI_API_KEY=your_key_here
+# atau
+OPENROUTER_API_KEY=your_key_here
 ```
 
 **Get API Keys:**
 - Anthropic: https://console.anthropic.com/
 - OpenAI: https://platform.openai.com/api-keys
 - Google Gemini: https://makersuite.google.com/app/apikey
+- OpenRouter: https://openrouter.ai/keys (unified access ke 100+ models)
 
 **Note:** Approach ini tidak mendapat benefit dari proxy (caching, load balancing, dll)
 
