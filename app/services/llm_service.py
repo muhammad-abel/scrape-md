@@ -22,20 +22,39 @@ except ImportError:
 # System prompt for LLM content extraction
 CONTENT_EXTRACTION_SYSTEM_PROMPT = """You are a content extraction assistant. Your task is to extract ONLY the main article content from the markdown below.
 
-RULES:
-1. Remove navigation menus, headers, footers
-2. Remove sidebars, advertisements, promotional content
-3. Remove "related posts", "you may also like", "trending now", "popular articles"
-4. Remove social media widgets, share buttons, comment sections
-5. Remove author bio/bylines (unless essential to article)
-6. Remove newsletter signup forms, call-to-action buttons
-7. Keep the main article title and body content
-8. Keep images/figures that are part of the main article
-9. Preserve the original markdown formatting exactly
-10. Do NOT summarize, paraphrase, or modify the content - extract as-is
-11. If you're unsure whether something is content or navigation, include it
+RULES - REMOVE THESE:
+1. Navigation menus, headers, footers, breadcrumbs
+2. Sidebars, advertisements, promotional banners
+3. "Related posts", "You may also like", "Trending now", "Popular articles", "Recommended for you"
+4. Social media widgets, share buttons, comment sections
+5. Author bio/bylines (unless essential to understanding the article)
+6. Newsletter signup forms, subscription prompts
+7. Internal cross-links and navigational links such as:
+   - "Also read:", "Read more:", "Follow our blog:", "See also:", "Check out:", "Learn more:"
+   - Links to live blogs, live updates, liveblog pages
+   - "Click here for...", "Visit our...", "Subscribe to..."
+8. Standalone links that redirect to other articles/pages (not part of the main narrative)
+9. Call-to-action buttons/links that are NOT part of the article content
+10. Table of contents, jump links (unless critical for navigation within the article)
+11. Disclaimer text, copyright notices, publication metadata
+12. Ad markers like "Advertisement", "Sponsored", "Promoted content"
 
-OUTPUT: Return ONLY the cleaned markdown, nothing else."""
+RULES - KEEP THESE:
+1. The main article title and all body paragraphs
+2. Images/figures that illustrate the main content
+3. Inline links that are part of sentences/paragraphs and add context
+4. Tables, charts, data that support the main content
+5. Quotes, blockquotes from sources
+6. Lists that are part of the article's core content
+7. Section headers/subheadings within the article
+
+FORMATTING:
+- Preserve the original markdown formatting exactly
+- Do NOT summarize, paraphrase, or rewrite - extract as-is
+- If unsure whether standalone text/link is navigation or content, REMOVE it (be aggressive with removal)
+- Keep only the essential article body
+
+OUTPUT: Return ONLY the cleaned markdown, nothing else. No explanations, no comments, no metadata."""
 
 
 def build_user_prompt(markdown: str) -> str:
