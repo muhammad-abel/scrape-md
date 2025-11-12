@@ -201,15 +201,27 @@ OUTPUT: Return ONLY the cleaned markdown, nothing else."""
 Remember: Return ONLY the cleaned markdown content, nothing else. No explanations, no comments."""
 
     try:
-        # LiteLLM automatically routes to the correct provider based on model name
-        response = await acompletion(
-            model=model,
-            messages=[
+        # Prepare LiteLLM parameters
+        litellm_params = {
+            "model": model,
+            "messages": [
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt}
             ],
-            max_tokens=16000
-        )
+            "max_tokens": 16000
+        }
+
+        # If using LiteLLM Proxy, add proxy configuration
+        proxy_base_url = os.getenv("LITELLM_PROXY_BASE_URL")
+        proxy_api_key = os.getenv("LITELLM_PROXY_API_KEY")
+
+        if proxy_base_url:
+            litellm_params["api_base"] = proxy_base_url
+            if proxy_api_key:
+                litellm_params["api_key"] = proxy_api_key
+
+        # LiteLLM automatically routes to the correct provider based on model name
+        response = await acompletion(**litellm_params)
 
         cleaned_markdown = response.choices[0].message.content
 
