@@ -11,9 +11,10 @@ Sebuah API web crawling agent yang menggunakan **Crawl4AI** untuk mengambil kont
 - ✅ **Content filtering** - Opsi untuk mengambil hanya konten utama tanpa navbar, footer, sidebar
 - ✅ **Custom exclusion** - Exclude HTML tags tertentu sesuai kebutuhan
 - ✅ **CSS Selector** - Target specific element dengan CSS selector
+- ✅ **🤖 Smart Clean with LLM** - Post-process cleaning dengan AI (Claude/GPT) untuk website non-semantic
 - ✅ Error handling untuk URL tidak valid atau halaman yang tidak dapat diakses
 - ✅ Opsi untuk menyimpan hasil ke file `.md`
-- ✅ Metadata lengkap (title, status code, timestamp)
+- ✅ Metadata lengkap (title, status code, timestamp, LLM usage)
 - ✅ RESTful API dengan FastAPI
 
 ## 🚀 Instalasi
@@ -31,7 +32,27 @@ cd scrape-md
 pip install -r requirements.txt
 ```
 
-### 3. Jalankan server
+### 3. Setup API Keys (Optional - hanya untuk smart_clean)
+
+Jika ingin menggunakan fitur **smart_clean** dengan LLM:
+
+```bash
+# Copy .env.example ke .env
+cp .env.example .env
+
+# Edit .env dan tambahkan API key
+# Untuk Anthropic Claude:
+ANTHROPIC_API_KEY=your_key_here
+
+# Atau untuk OpenAI GPT:
+OPENAI_API_KEY=your_key_here
+```
+
+**Get API Keys:**
+- Anthropic: https://console.anthropic.com/
+- OpenAI: https://platform.openai.com/api-keys
+
+### 4. Jalankan server
 
 ```bash
 python main.py
@@ -138,9 +159,45 @@ curl -X POST "http://localhost:8000/crawl" \
 - `".post-content"` - Element dengan class `post-content`
 - `"div.container > article"` - Article dalam container
 
-### Example 6: Kombinasi + Save to File
+### Example 6: Smart Clean with LLM (🔥 NEW!)
 
-Gabungkan semua opsi untuk hasil maksimal:
+Gunakan AI untuk automatically clean content - **Perfect untuk website non-semantic HTML!**
+
+```bash
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://www.moneycontrol.com/news/..."],
+    "smart_clean": true
+  }'
+```
+
+**Kenapa pakai smart_clean?**
+- ✅ Otomatis detect dan remove navbar, footer, ads, related posts
+- ✅ Works untuk website yang tidak pakai semantic HTML (`<nav>`, `<footer>`, dll)
+- ✅ Context-aware cleaning (AI understands content vs noise)
+- ✅ Ideal untuk website lama atau custom structure
+
+**Default:** Menggunakan Claude 3.5 Haiku (fast & cheap: ~$0.001 per request)
+
+### Example 7: Smart Clean with OpenAI
+
+Pakai OpenAI GPT-4o-mini sebagai alternatif:
+
+```bash
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com"],
+    "smart_clean": true,
+    "llm_provider": "openai",
+    "llm_model": "gpt-4o-mini"
+  }'
+```
+
+### Example 8: Kombinasi Semua Fitur
+
+Gabungkan pre-filter + LLM cleaning untuk hasil terbaik:
 
 ```bash
 curl -X POST "http://localhost:8000/crawl" \
@@ -148,11 +205,13 @@ curl -X POST "http://localhost:8000/crawl" \
   -d '{
     "urls": ["https://example.com"],
     "content_only": true,
-    "excluded_tags": ["figure", "img"],
+    "smart_clean": true,
     "save_to_file": true,
     "output_dir": "output_markdown"
   }'
 ```
+
+**Flow:** Pre-filter HTML tags → Crawl → LLM post-process → Clean markdown!
 
 ### Request Body Schema
 
@@ -161,16 +220,22 @@ curl -X POST "http://localhost:8000/crawl" \
   "urls": ["string"],                    // Required: List URL yang akan di-crawl
   "save_to_file": false,                 // Optional: Simpan hasil ke file .md
   "output_dir": "output_markdown",       // Optional: Direktori output
+
+  // Content filtering (pre-crawl)
   "content_only": false,                 // Optional: Ambil hanya konten utama
   "excluded_tags": ["nav", "footer"],    // Optional: Custom tags yang di-exclude
-  "css_selector": "article"              // Optional: CSS selector untuk target element
+  "css_selector": "article",             // Optional: CSS selector untuk target element
+
+  // Smart cleaning (post-crawl with LLM)
+  "smart_clean": false,                  // Optional: Clean dengan AI
+  "llm_provider": "anthropic",           // Optional: "anthropic" or "openai"
+  "llm_model": "claude-3-5-haiku-20241022" // Optional: Model name
 }
 ```
 
-**Parameter Priority:**
-- `css_selector` (highest) - Jika ada, hanya ambil element yang match
-- `excluded_tags` - Custom tags ditambahkan ke daftar exclusion
-- `content_only` - Preset exclusion untuk konten bersih
+**Cleaning Strategy:**
+- **Pre-crawl filtering:** `css_selector` > `excluded_tags` > `content_only`
+- **Post-crawl cleaning:** `smart_clean` (AI-powered, most flexible)
 
 ### Response Schema
 
@@ -179,7 +244,7 @@ curl -X POST "http://localhost:8000/crawl" \
   "results": [
     {
       "url": "string",
-      "markdown": "string",
+      "markdown": "string",  // Cleaned markdown content
       "metadata": {
         "title": "string",
         "status_code": 200,
@@ -187,7 +252,13 @@ curl -X POST "http://localhost:8000/crawl" \
         "success": true,
         "url": "string",
         "excluded_tags": ["form", "nav", "footer"],
-        "css_selector": null
+        "css_selector": null,
+        // LLM metadata (jika smart_clean=true)
+        "llm_provider": "anthropic",
+        "llm_model": "claude-3-5-haiku-20241022",
+        "input_tokens": 5243,
+        "output_tokens": 2156,
+        "llm_cleaning": "success"
       },
       "status": "success",
       "file_path": "output_markdown/example_com.md"
@@ -243,27 +314,67 @@ scrape-md/
 
 ## ⚙️ Content Filtering Options
 
-### 1. Content Only Mode
+### Pre-Crawl Filtering (HTML-based)
+
+#### 1. Content Only Mode
 Set `content_only: true` untuk mengaktifkan preset clean content:
 ```json
 {"urls": ["..."], "content_only": true}
 ```
 Otomatis exclude: nav, footer, header, aside, script, style, iframe, button, input, select, textarea, figure
 
-### 2. Custom Excluded Tags
+#### 2. Custom Excluded Tags
 Specify tags tertentu yang mau di-exclude:
 ```json
 {"urls": ["..."], "excluded_tags": ["nav", "footer", "aside"]}
 ```
 
-### 3. CSS Selector
+#### 3. CSS Selector
 Target element tertentu dengan CSS selector:
 ```json
 {"urls": ["..."], "css_selector": "article.main-content"}
 ```
 
-### Kombinasi
-Semua opsi bisa digabung dengan priority: `css_selector` > `excluded_tags` > `content_only`
+**Priority:** `css_selector` > `excluded_tags` > `content_only`
+
+---
+
+### 🤖 Post-Crawl Smart Cleaning (AI-powered)
+
+**Perfect untuk website dengan struktur non-standard!**
+
+```json
+{"urls": ["..."], "smart_clean": true}
+```
+
+**How it works:**
+1. Crawl halaman (dengan atau tanpa pre-filtering)
+2. Convert ke markdown
+3. Pass ke LLM (Claude/GPT) dengan prompt khusus
+4. LLM analyze dan remove navigation, ads, related posts, dll
+5. Return cleaned markdown
+
+**Advantages:**
+- ✅ Works untuk ANY website structure
+- ✅ Semantic understanding (AI knows content vs noise)
+- ✅ No need to analyze HTML structure
+- ✅ Handles dynamic/custom layouts
+
+**Cost & Speed:**
+- Claude 3.5 Haiku: ~$0.001 per request, ~3-5s latency
+- GPT-4o-mini: ~$0.002 per request, ~3-5s latency
+
+**When to use:**
+- Website tidak pakai semantic HTML
+- Custom/unique layouts
+- High-quality extraction lebih penting dari speed
+- Budget ada untuk LLM API calls
+
+**Available Models:**
+- `claude-3-5-haiku-20241022` (default, recommended)
+- `claude-3-5-sonnet-20241022` (more powerful, slower)
+- `gpt-4o-mini` (OpenAI alternative)
+- `gpt-4o` (highest quality, expensive)
 
 ## ⚙️ Default Crawl4AI Configuration
 

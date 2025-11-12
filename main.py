@@ -11,6 +11,23 @@ import re
 import os
 from pathlib import Path
 import asyncio
+from dotenv import load_dotenv
+
+# LLM providers (optional - only imported if smart_clean is used)
+try:
+    from anthropic import Anthropic
+    ANTHROPIC_AVAILABLE = True
+except ImportError:
+    ANTHROPIC_AVAILABLE = False
+
+try:
+    from openai import OpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+# Load environment variables
+load_dotenv()
 
 app = FastAPI(
     title="Web Crawling Agent",
@@ -28,6 +45,11 @@ class CrawlRequest(BaseModel):
     content_only: Optional[bool] = False
     excluded_tags: Optional[List[str]] = None
     css_selector: Optional[str] = None
+
+    # Smart cleaning with LLM (post-process)
+    smart_clean: Optional[bool] = False
+    llm_provider: Optional[str] = "anthropic"  # "anthropic" or "openai"
+    llm_model: Optional[str] = None  # Default: claude-3-5-haiku for anthropic, gpt-4o-mini for openai
 
     @validator('urls')
     def validate_urls(cls, v):
@@ -135,6 +157,138 @@ def build_excluded_tags(content_only: bool = False, custom_tags: Optional[List[s
     # Remove duplicates
     return list(set(excluded))
 
+async def clean_markdown_with_llm(
+    markdown: str,
+    provider: str = "anthropic",
+    model: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Clean markdown content menggunakan LLM untuk remove navbar, footer, ads, dll.
+
+    Parameters:
+    - markdown: Raw markdown content
+    - provider: LLM provider ("anthropic" or "openai")
+    - model: Model name (default: claude-3-5-haiku-20241022 or gpt-4o-mini)
+
+    Returns:
+    - Dict dengan cleaned_markdown dan metadata
+    """
+
+    # Prompt untuk LLM
+    system_prompt = """You are a content extraction assistant. Your task is to extract ONLY the main article content from the markdown below.
+
+RULES:
+1. Remove navigation menus, headers, footers
+2. Remove sidebars, advertisements, promotional content
+3. Remove "related posts", "you may also like", "trending now", "popular articles"
+4. Remove social media widgets, share buttons, comment sections
+5. Remove author bio/bylines (unless essential to article)
+6. Remove newsletter signup forms, call-to-action buttons
+7. Keep the main article title and body content
+8. Keep images/figures that are part of the main article
+9. Preserve the original markdown formatting exactly
+10. Do NOT summarize, paraphrase, or modify the content - extract as-is
+11. If you're unsure whether something is content or navigation, include it
+
+OUTPUT: Return ONLY the cleaned markdown, nothing else."""
+
+    user_prompt = f"""Extract the main article content from this markdown:
+
+---
+{markdown}
+---
+
+Remember: Return ONLY the cleaned markdown content, nothing else. No explanations, no comments."""
+
+    try:
+        if provider == "anthropic":
+            if not ANTHROPIC_AVAILABLE:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Anthropic SDK not installed. Install with: pip install anthropic"
+                )
+
+            api_key = os.getenv("ANTHROPIC_API_KEY")
+            if not api_key:
+                raise HTTPException(
+                    status_code=500,
+                    detail="ANTHROPIC_API_KEY not found in environment variables"
+                )
+
+            client = Anthropic(api_key=api_key)
+            model_name = model or "claude-3-5-haiku-20241022"
+
+            response = client.messages.create(
+                model=model_name,
+                max_tokens=16000,
+                system=system_prompt,
+                messages=[
+                    {"role": "user", "content": user_prompt}
+                ]
+            )
+
+            cleaned_markdown = response.content[0].text
+
+            return {
+                "cleaned_markdown": cleaned_markdown,
+                "provider": provider,
+                "model": model_name,
+                "input_tokens": response.usage.input_tokens,
+                "output_tokens": response.usage.output_tokens,
+                "success": True
+            }
+
+        elif provider == "openai":
+            if not OPENAI_AVAILABLE:
+                raise HTTPException(
+                    status_code=500,
+                    detail="OpenAI SDK not installed. Install with: pip install openai"
+                )
+
+            api_key = os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                raise HTTPException(
+                    status_code=500,
+                    detail="OPENAI_API_KEY not found in environment variables"
+                )
+
+            client = OpenAI(api_key=api_key)
+            model_name = model or "gpt-4o-mini"
+
+            response = client.chat.completions.create(
+                model=model_name,
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt}
+                ],
+                max_tokens=16000
+            )
+
+            cleaned_markdown = response.choices[0].message.content
+
+            return {
+                "cleaned_markdown": cleaned_markdown,
+                "provider": provider,
+                "model": model_name,
+                "input_tokens": response.usage.prompt_tokens,
+                "output_tokens": response.usage.completion_tokens,
+                "success": True
+            }
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Unsupported LLM provider: {provider}. Use 'anthropic' or 'openai'"
+            )
+
+    except Exception as e:
+        return {
+            "cleaned_markdown": markdown,  # Fallback ke original
+            "provider": provider,
+            "model": model,
+            "error": str(e),
+            "success": False
+        }
+
 async def save_markdown_to_file(content: str, url: str, output_dir: str) -> str:
     """
     Menyimpan konten Markdown ke file
@@ -176,7 +330,10 @@ async def crawl_single_url(
     output_dir: str = "output_markdown",
     content_only: bool = False,
     excluded_tags: Optional[List[str]] = None,
-    css_selector: Optional[str] = None
+    css_selector: Optional[str] = None,
+    smart_clean: bool = False,
+    llm_provider: str = "anthropic",
+    llm_model: Optional[str] = None
 ) -> CrawlResult:
     """
     Crawl satu URL dan return hasilnya
@@ -189,6 +346,9 @@ async def crawl_single_url(
     - content_only: Jika True, hanya ambil konten utama (exclude navbar, footer, dll)
     - excluded_tags: Custom list HTML tags yang akan di-exclude
     - css_selector: CSS selector untuk target specific element
+    - smart_clean: Jika True, gunakan LLM untuk clean markdown post-crawl
+    - llm_provider: Provider LLM ("anthropic" or "openai")
+    - llm_model: Model LLM (optional, default per provider)
     """
     try:
         # Build excluded tags list
@@ -212,6 +372,32 @@ async def crawl_single_url(
         # Extract markdown dari result
         markdown_content = result.markdown if hasattr(result, 'markdown') else result.markdown_v2.raw_markdown
 
+        # Smart clean dengan LLM jika diminta
+        llm_metadata = {}
+        if smart_clean and markdown_content:
+            llm_result = await clean_markdown_with_llm(
+                markdown_content,
+                provider=llm_provider,
+                model=llm_model
+            )
+
+            if llm_result["success"]:
+                markdown_content = llm_result["cleaned_markdown"]
+                llm_metadata = {
+                    "llm_provider": llm_result["provider"],
+                    "llm_model": llm_result["model"],
+                    "input_tokens": llm_result["input_tokens"],
+                    "output_tokens": llm_result["output_tokens"],
+                    "llm_cleaning": "success"
+                }
+            else:
+                llm_metadata = {
+                    "llm_provider": llm_provider,
+                    "llm_model": llm_model,
+                    "llm_cleaning": "failed",
+                    "llm_error": llm_result.get("error", "Unknown error")
+                }
+
         # Metadata
         metadata = {
             "title": getattr(result, 'title', 'N/A'),
@@ -220,7 +406,8 @@ async def crawl_single_url(
             "success": result.success,
             "url": url,
             "excluded_tags": tags_to_exclude,
-            "css_selector": css_selector
+            "css_selector": css_selector,
+            **llm_metadata  # Add LLM metadata if available
         }
 
         # Simpan ke file jika diminta
@@ -373,6 +560,9 @@ async def crawl_urls(request: CrawlRequest):
     - content_only: (Optional) Jika True, hanya ambil konten utama tanpa navbar, footer, dll (default: False)
     - excluded_tags: (Optional) Custom list HTML tags yang akan di-exclude
     - css_selector: (Optional) CSS selector untuk target specific element (contoh: "article", "#main-content")
+    - smart_clean: (Optional) Jika True, gunakan LLM untuk clean markdown post-crawl (default: False)
+    - llm_provider: (Optional) Provider LLM: "anthropic" atau "openai" (default: "anthropic")
+    - llm_model: (Optional) Model LLM (default: claude-3-5-haiku-20241022 atau gpt-4o-mini)
 
     Returns:
     - results: List hasil crawling untuk setiap URL
@@ -385,6 +575,8 @@ async def crawl_urls(request: CrawlRequest):
     - Clean content only: {"urls": ["https://example.com"], "content_only": true}
     - Custom exclusion: {"urls": ["https://example.com"], "excluded_tags": ["nav", "footer"]}
     - Target specific element: {"urls": ["https://example.com"], "css_selector": "article.main"}
+    - Smart clean with LLM: {"urls": ["https://example.com"], "smart_clean": true}
+    - Smart clean with OpenAI: {"urls": ["https://example.com"], "smart_clean": true, "llm_provider": "openai"}
     """
     # Initialize crawler
     async with AsyncWebCrawler(verbose=False) as crawler:
@@ -397,7 +589,10 @@ async def crawl_urls(request: CrawlRequest):
                 output_dir=request.output_dir,
                 content_only=request.content_only,
                 excluded_tags=request.excluded_tags,
-                css_selector=request.css_selector
+                css_selector=request.css_selector,
+                smart_clean=request.smart_clean,
+                llm_provider=request.llm_provider,
+                llm_model=request.llm_model
             )
             for url in request.urls
         ]

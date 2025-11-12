@@ -3,3 +3,8 @@ uvicorn[standard]==0.27.0
 crawl4ai==0.3.74
 pydantic==2.5.3
 python-multipart==0.0.6
+
+# LLM providers for smart content cleaning
+anthropic==0.34.0
+openai==1.35.0
+python-dotenv==1.0.0
