@@ -63,6 +63,22 @@ class CrawlResponse(BaseModel):
     successful: int
     failed: int
 
+# Model untuk debug endpoint
+class DebugCrawlResult(BaseModel):
+    url: str
+    cleaned_html: str
+    markdown: str
+    metadata: Dict[str, Any]
+    status: str
+    html_file_path: Optional[str] = None
+    markdown_file_path: Optional[str] = None
+
+class DebugCrawlResponse(BaseModel):
+    results: List[DebugCrawlResult]
+    total_urls: int
+    successful: int
+    failed: int
+
 def sanitize_filename(url: str) -> str:
     """
     Membuat nama file yang aman dari URL
@@ -128,6 +144,23 @@ async def save_markdown_to_file(content: str, url: str, output_dir: str) -> str:
 
     # Generate filename dari URL
     filename = sanitize_filename(url)
+    filepath = os.path.join(output_dir, filename)
+
+    # Tulis file
+    with open(filepath, 'w', encoding='utf-8') as f:
+        f.write(content)
+
+    return filepath
+
+async def save_html_to_file(content: str, url: str, output_dir: str) -> str:
+    """
+    Menyimpan konten HTML ke file
+    """
+    # Buat direktori jika belum ada
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
+    # Generate filename dari URL (ganti .md dengan .html)
+    filename = sanitize_filename(url).replace('.md', '.html')
     filepath = os.path.join(output_dir, filename)
 
     # Tulis file
@@ -218,6 +251,91 @@ async def crawl_single_url(
             file_path=None
         )
 
+async def debug_crawl_single_url(
+    url: str,
+    crawler: AsyncWebCrawler,
+    save_file: bool = False,
+    output_dir: str = "debug_output",
+    content_only: bool = False,
+    excluded_tags: Optional[List[str]] = None,
+    css_selector: Optional[str] = None
+) -> DebugCrawlResult:
+    """
+    Crawl single URL dan return cleaned HTML + markdown untuk debugging
+    """
+    try:
+        # Build excluded tags list
+        tags_to_exclude = build_excluded_tags(content_only, excluded_tags)
+
+        # Prepare crawl parameters
+        crawl_params = {
+            "url": url,
+            "word_count_threshold": 10,
+            "excluded_tags": tags_to_exclude,
+            "remove_overlay_elements": True,
+        }
+
+        # Add CSS selector jika ada (highest priority)
+        if css_selector:
+            crawl_params["css_selector"] = css_selector
+
+        # Jalankan crawling
+        result = await crawler.arun(**crawl_params)
+
+        # Extract markdown dan cleaned HTML dari result
+        markdown_content = result.markdown if hasattr(result, 'markdown') else result.markdown_v2.raw_markdown
+        cleaned_html = result.cleaned_html if hasattr(result, 'cleaned_html') else result.html
+
+        # Metadata
+        metadata = {
+            "title": getattr(result, 'title', 'N/A'),
+            "status_code": getattr(result, 'status_code', 200),
+            "fetched_at": datetime.utcnow().isoformat() + "Z",
+            "success": result.success,
+            "url": url,
+            "excluded_tags": tags_to_exclude,
+            "css_selector": css_selector,
+            "html_length": len(cleaned_html) if cleaned_html else 0,
+            "markdown_length": len(markdown_content) if markdown_content else 0
+        }
+
+        # Simpan ke file jika diminta
+        html_file_path = None
+        markdown_file_path = None
+
+        if save_file:
+            if cleaned_html:
+                html_file_path = await save_html_to_file(cleaned_html, url, output_dir)
+            if markdown_content:
+                markdown_file_path = await save_markdown_to_file(markdown_content, url, output_dir)
+
+        return DebugCrawlResult(
+            url=url,
+            cleaned_html=cleaned_html if cleaned_html else "",
+            markdown=markdown_content if markdown_content else "",
+            metadata=metadata,
+            status="success" if result.success else "failed",
+            html_file_path=html_file_path,
+            markdown_file_path=markdown_file_path
+        )
+
+    except Exception as e:
+        # Handle error
+        return DebugCrawlResult(
+            url=url,
+            cleaned_html="",
+            markdown="",
+            metadata={
+                "error": str(e),
+                "status_code": 0,
+                "fetched_at": datetime.utcnow().isoformat() + "Z",
+                "success": False
+            },
+            status="failed",
+            html_file_path=None,
+            markdown_file_path=None
+        )
+
 @app.get("/")
 async def root():
     """
@@ -227,7 +345,8 @@ async def root():
         "message": "Web Crawling Agent API",
         "version": "1.0.0",
         "endpoints": {
-            "/crawl": "POST - Crawl satu atau beberapa URL",
+            "/crawl": "POST - Crawl satu atau beberapa URL (return markdown)",
+            "/debug-crawl": "POST - Crawl dengan cleaned HTML untuk debugging",
             "/health": "GET - Health check"
         }
     }
@@ -290,6 +409,44 @@ async def crawl_urls(request: CrawlRequest):
     failed = len(results) - successful
 
     return CrawlResponse(
+        results=results,
+        total_urls=len(request.urls),
+        successful=successful,
+        failed=failed
+    )
+
+@app.post("/debug-crawl", response_model=DebugCrawlResponse)
+async def debug_crawl_endpoint(request: CrawlRequest):
+    """
+    Debug endpoint untuk crawl URLs dan return cleaned HTML + markdown
+
+    Berguna untuk debugging dan melihat hasil cleaning HTML sebelum convert ke markdown.
+
+    Parameters sama dengan /crawl endpoint, tapi response include cleaned_html.
+    Output directory default: "debug_output"
+    """
+    async with AsyncWebCrawler(verbose=True) as crawler:
+        # Jalankan debug crawling untuk semua URL secara concurrent
+        tasks = [
+            debug_crawl_single_url(
+                url=url,
+                crawler=crawler,
+                save_file=request.save_to_file,
+                output_dir=request.output_dir if request.output_dir != "output_markdown" else "debug_output",
+                content_only=request.content_only,
+                excluded_tags=request.excluded_tags,
+                css_selector=request.css_selector
+            )
+            for url in request.urls
+        ]
+
+        results = await asyncio.gather(*tasks)
+
+    # Hitung statistik
+    successful = sum(1 for r in results if r.status == "success")
+    failed = len(results) - successful
+
+    return DebugCrawlResponse(
         results=results,
         total_urls=len(request.urls),
         successful=successful,
