@@ -178,20 +178,38 @@ curl -X POST "http://localhost:8000/crawl" \
 - ✅ Context-aware cleaning (AI understands content vs noise)
 - ✅ Ideal untuk website lama atau custom structure
 
-**Default:** Menggunakan Claude 3.5 Haiku (fast & cheap: ~$0.001 per request)
+**Default:** Claude 3.5 Haiku (fast & cheap: ~$0.001 per request)
 
-### Example 7: Smart Clean with OpenAI
+### Example 7: Smart Clean with Different Models
 
-Pakai OpenAI GPT-4o-mini sebagai alternatif:
+**Powered by LiteLLM** - Switch models easily, auto-routing to correct provider!
 
 ```bash
+# GPT-4o-mini (OpenAI)
 curl -X POST "http://localhost:8000/crawl" \
   -H "Content-Type: application/json" \
   -d '{
     "urls": ["https://example.com"],
     "smart_clean": true,
-    "llm_provider": "openai",
     "llm_model": "gpt-4o-mini"
+  }'
+
+# Gemini Pro (Google)
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com"],
+    "smart_clean": true,
+    "llm_model": "gemini-pro"
+  }'
+
+# Claude Sonnet (more powerful)
+curl -X POST "http://localhost:8000/crawl" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "urls": ["https://example.com"],
+    "smart_clean": true,
+    "llm_model": "claude-3-5-sonnet-20241022"
   }'
 ```
 
@@ -226,16 +244,22 @@ curl -X POST "http://localhost:8000/crawl" \
   "excluded_tags": ["nav", "footer"],    // Optional: Custom tags yang di-exclude
   "css_selector": "article",             // Optional: CSS selector untuk target element
 
-  // Smart cleaning (post-crawl with LLM)
+  // Smart cleaning (post-crawl with LLM via LiteLLM)
   "smart_clean": false,                  // Optional: Clean dengan AI
-  "llm_provider": "anthropic",           // Optional: "anthropic" or "openai"
-  "llm_model": "claude-3-5-haiku-20241022" // Optional: Model name
+  "llm_model": "claude-3-5-haiku-20241022" // Optional: Model name (auto-routes to provider)
 }
 ```
 
 **Cleaning Strategy:**
 - **Pre-crawl filtering:** `css_selector` > `excluded_tags` > `content_only`
 - **Post-crawl cleaning:** `smart_clean` (AI-powered, most flexible)
+
+**Supported Models (via LiteLLM):**
+- Anthropic: `claude-3-5-haiku-20241022`, `claude-3-5-sonnet-20241022`
+- OpenAI: `gpt-4o-mini`, `gpt-4o`, `gpt-3.5-turbo`
+- Google: `gemini-pro`, `gemini-1.5-pro`
+- Cohere: `command`, `command-light`
+- And 100+ more! See: https://docs.litellm.ai/docs/providers
 
 ### Response Schema
 
@@ -254,7 +278,6 @@ curl -X POST "http://localhost:8000/crawl" \
         "excluded_tags": ["form", "nav", "footer"],
         "css_selector": null,
         // LLM metadata (jika smart_clean=true)
-        "llm_provider": "anthropic",
         "llm_model": "claude-3-5-haiku-20241022",
         "input_tokens": 5243,
         "output_tokens": 2156,
@@ -298,6 +321,7 @@ curl -X POST "http://localhost:8000/crawl" \
 
 - **FastAPI** - Modern web framework untuk Python
 - **Crawl4AI** - Library untuk web crawling dan scraping
+- **LiteLLM** - Unified interface untuk 100+ LLM providers
 - **Pydantic** - Data validation menggunakan Python type hints
 - **Uvicorn** - ASGI server
 
@@ -339,7 +363,7 @@ Target element tertentu dengan CSS selector:
 
 ---
 
-### 🤖 Post-Crawl Smart Cleaning (AI-powered)
+### 🤖 Post-Crawl Smart Cleaning (AI-powered via LiteLLM)
 
 **Perfect untuk website dengan struktur non-standard!**
 
@@ -350,7 +374,7 @@ Target element tertentu dengan CSS selector:
 **How it works:**
 1. Crawl halaman (dengan atau tanpa pre-filtering)
 2. Convert ke markdown
-3. Pass ke LLM (Claude/GPT) dengan prompt khusus
+3. Pass ke LLM via **LiteLLM** dengan prompt khusus
 4. LLM analyze dan remove navigation, ads, related posts, dll
 5. Return cleaned markdown
 
@@ -359,10 +383,13 @@ Target element tertentu dengan CSS selector:
 - ✅ Semantic understanding (AI knows content vs noise)
 - ✅ No need to analyze HTML structure
 - ✅ Handles dynamic/custom layouts
+- ✅ **100+ models** supported via LiteLLM
+- ✅ **Easy switching** between providers
 
 **Cost & Speed:**
 - Claude 3.5 Haiku: ~$0.001 per request, ~3-5s latency
 - GPT-4o-mini: ~$0.002 per request, ~3-5s latency
+- Gemini Pro: ~$0.0001 per request, ~2-4s latency
 
 **When to use:**
 - Website tidak pakai semantic HTML
@@ -370,11 +397,15 @@ Target element tertentu dengan CSS selector:
 - High-quality extraction lebih penting dari speed
 - Budget ada untuk LLM API calls
 
-**Available Models:**
-- `claude-3-5-haiku-20241022` (default, recommended)
-- `claude-3-5-sonnet-20241022` (more powerful, slower)
-- `gpt-4o-mini` (OpenAI alternative)
+**Popular Models (LiteLLM auto-routes):**
+- `claude-3-5-haiku-20241022` (default, fast & cheap)
+- `claude-3-5-sonnet-20241022` (more powerful)
+- `gpt-4o-mini` (OpenAI, good quality)
 - `gpt-4o` (highest quality, expensive)
+- `gemini-pro` (Google, very cheap)
+- `command` (Cohere)
+
+See all: https://docs.litellm.ai/docs/providers
 
 ## ⚙️ Default Crawl4AI Configuration
 

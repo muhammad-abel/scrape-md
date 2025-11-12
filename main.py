@@ -13,18 +13,12 @@ from pathlib import Path
 import asyncio
 from dotenv import load_dotenv
 
-# LLM providers (optional - only imported if smart_clean is used)
+# LLM provider via LiteLLM (optional - only imported if smart_clean is used)
 try:
-    from anthropic import Anthropic
-    ANTHROPIC_AVAILABLE = True
+    from litellm import acompletion
+    LITELLM_AVAILABLE = True
 except ImportError:
-    ANTHROPIC_AVAILABLE = False
-
-try:
-    from openai import OpenAI
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
+    LITELLM_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
@@ -46,10 +40,9 @@ class CrawlRequest(BaseModel):
     excluded_tags: Optional[List[str]] = None
     css_selector: Optional[str] = None
 
-    # Smart cleaning with LLM (post-process)
+    # Smart cleaning with LLM (post-process via LiteLLM)
     smart_clean: Optional[bool] = False
-    llm_provider: Optional[str] = "anthropic"  # "anthropic" or "openai"
-    llm_model: Optional[str] = None  # Default: claude-3-5-haiku for anthropic, gpt-4o-mini for openai
+    llm_model: Optional[str] = "claude-3-5-haiku-20241022"  # LiteLLM auto-detects provider from model name
 
     @validator('urls')
     def validate_urls(cls, v):
@@ -159,20 +152,27 @@ def build_excluded_tags(content_only: bool = False, custom_tags: Optional[List[s
 
 async def clean_markdown_with_llm(
     markdown: str,
-    provider: str = "anthropic",
-    model: Optional[str] = None
+    model: str = "claude-3-5-haiku-20241022"
 ) -> Dict[str, Any]:
     """
-    Clean markdown content menggunakan LLM untuk remove navbar, footer, ads, dll.
+    Clean markdown content menggunakan LLM (via LiteLLM) untuk remove navbar, footer, ads, dll.
 
     Parameters:
     - markdown: Raw markdown content
-    - provider: LLM provider ("anthropic" or "openai")
-    - model: Model name (default: claude-3-5-haiku-20241022 or gpt-4o-mini)
+    - model: Model name (LiteLLM auto-detects provider)
+      Examples: "claude-3-5-haiku-20241022", "gpt-4o-mini", "gemini-pro"
 
     Returns:
     - Dict dengan cleaned_markdown dan metadata
     """
+
+    if not LITELLM_AVAILABLE:
+        return {
+            "cleaned_markdown": markdown,
+            "model": model,
+            "error": "LiteLLM not installed. Install with: pip install litellm",
+            "success": False
+        }
 
     # Prompt untuk LLM
     system_prompt = """You are a content extraction assistant. Your task is to extract ONLY the main article content from the markdown below.
@@ -201,89 +201,34 @@ OUTPUT: Return ONLY the cleaned markdown, nothing else."""
 Remember: Return ONLY the cleaned markdown content, nothing else. No explanations, no comments."""
 
     try:
-        if provider == "anthropic":
-            if not ANTHROPIC_AVAILABLE:
-                raise HTTPException(
-                    status_code=500,
-                    detail="Anthropic SDK not installed. Install with: pip install anthropic"
-                )
+        # LiteLLM automatically routes to the correct provider based on model name
+        response = await acompletion(
+            model=model,
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt}
+            ],
+            max_tokens=16000
+        )
 
-            api_key = os.getenv("ANTHROPIC_API_KEY")
-            if not api_key:
-                raise HTTPException(
-                    status_code=500,
-                    detail="ANTHROPIC_API_KEY not found in environment variables"
-                )
+        cleaned_markdown = response.choices[0].message.content
 
-            client = Anthropic(api_key=api_key)
-            model_name = model or "claude-3-5-haiku-20241022"
+        # Extract usage info
+        usage = response.usage if hasattr(response, 'usage') else None
+        input_tokens = usage.prompt_tokens if usage else 0
+        output_tokens = usage.completion_tokens if usage else 0
 
-            response = client.messages.create(
-                model=model_name,
-                max_tokens=16000,
-                system=system_prompt,
-                messages=[
-                    {"role": "user", "content": user_prompt}
-                ]
-            )
-
-            cleaned_markdown = response.content[0].text
-
-            return {
-                "cleaned_markdown": cleaned_markdown,
-                "provider": provider,
-                "model": model_name,
-                "input_tokens": response.usage.input_tokens,
-                "output_tokens": response.usage.output_tokens,
-                "success": True
-            }
-
-        elif provider == "openai":
-            if not OPENAI_AVAILABLE:
-                raise HTTPException(
-                    status_code=500,
-                    detail="OpenAI SDK not installed. Install with: pip install openai"
-                )
-
-            api_key = os.getenv("OPENAI_API_KEY")
-            if not api_key:
-                raise HTTPException(
-                    status_code=500,
-                    detail="OPENAI_API_KEY not found in environment variables"
-                )
-
-            client = OpenAI(api_key=api_key)
-            model_name = model or "gpt-4o-mini"
-
-            response = client.chat.completions.create(
-                model=model_name,
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt}
-                ],
-                max_tokens=16000
-            )
-
-            cleaned_markdown = response.choices[0].message.content
-
-            return {
-                "cleaned_markdown": cleaned_markdown,
-                "provider": provider,
-                "model": model_name,
-                "input_tokens": response.usage.prompt_tokens,
-                "output_tokens": response.usage.completion_tokens,
-                "success": True
-            }
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unsupported LLM provider: {provider}. Use 'anthropic' or 'openai'"
-            )
+        return {
+            "cleaned_markdown": cleaned_markdown,
+            "model": model,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "success": True
+        }
 
     except Exception as e:
         return {
             "cleaned_markdown": markdown,  # Fallback ke original
-            "provider": provider,
             "model": model,
             "error": str(e),
             "success": False
@@ -332,8 +277,7 @@ async def crawl_single_url(
     excluded_tags: Optional[List[str]] = None,
     css_selector: Optional[str] = None,
     smart_clean: bool = False,
-    llm_provider: str = "anthropic",
-    llm_model: Optional[str] = None
+    llm_model: str = "claude-3-5-haiku-20241022"
 ) -> CrawlResult:
     """
     Crawl satu URL dan return hasilnya
@@ -346,9 +290,8 @@ async def crawl_single_url(
     - content_only: Jika True, hanya ambil konten utama (exclude navbar, footer, dll)
     - excluded_tags: Custom list HTML tags yang akan di-exclude
     - css_selector: CSS selector untuk target specific element
-    - smart_clean: Jika True, gunakan LLM untuk clean markdown post-crawl
-    - llm_provider: Provider LLM ("anthropic" or "openai")
-    - llm_model: Model LLM (optional, default per provider)
+    - smart_clean: Jika True, gunakan LLM untuk clean markdown post-crawl (via LiteLLM)
+    - llm_model: Model name (LiteLLM auto-detects provider)
     """
     try:
         # Build excluded tags list
@@ -377,14 +320,12 @@ async def crawl_single_url(
         if smart_clean and markdown_content:
             llm_result = await clean_markdown_with_llm(
                 markdown_content,
-                provider=llm_provider,
                 model=llm_model
             )
 
             if llm_result["success"]:
                 markdown_content = llm_result["cleaned_markdown"]
                 llm_metadata = {
-                    "llm_provider": llm_result["provider"],
                     "llm_model": llm_result["model"],
                     "input_tokens": llm_result["input_tokens"],
                     "output_tokens": llm_result["output_tokens"],
@@ -392,7 +333,6 @@ async def crawl_single_url(
                 }
             else:
                 llm_metadata = {
-                    "llm_provider": llm_provider,
                     "llm_model": llm_model,
                     "llm_cleaning": "failed",
                     "llm_error": llm_result.get("error", "Unknown error")
@@ -561,8 +501,7 @@ async def crawl_urls(request: CrawlRequest):
     - excluded_tags: (Optional) Custom list HTML tags yang akan di-exclude
     - css_selector: (Optional) CSS selector untuk target specific element (contoh: "article", "#main-content")
     - smart_clean: (Optional) Jika True, gunakan LLM untuk clean markdown post-crawl (default: False)
-    - llm_provider: (Optional) Provider LLM: "anthropic" atau "openai" (default: "anthropic")
-    - llm_model: (Optional) Model LLM (default: claude-3-5-haiku-20241022 atau gpt-4o-mini)
+    - llm_model: (Optional) Model name (LiteLLM auto-detects provider) (default: claude-3-5-haiku-20241022)
 
     Returns:
     - results: List hasil crawling untuk setiap URL
@@ -575,8 +514,9 @@ async def crawl_urls(request: CrawlRequest):
     - Clean content only: {"urls": ["https://example.com"], "content_only": true}
     - Custom exclusion: {"urls": ["https://example.com"], "excluded_tags": ["nav", "footer"]}
     - Target specific element: {"urls": ["https://example.com"], "css_selector": "article.main"}
-    - Smart clean with LLM: {"urls": ["https://example.com"], "smart_clean": true}
-    - Smart clean with OpenAI: {"urls": ["https://example.com"], "smart_clean": true, "llm_provider": "openai"}
+    - Smart clean with Claude: {"urls": ["https://example.com"], "smart_clean": true}
+    - Smart clean with GPT: {"urls": ["https://example.com"], "smart_clean": true, "llm_model": "gpt-4o-mini"}
+    - Smart clean with Gemini: {"urls": ["https://example.com"], "smart_clean": true, "llm_model": "gemini-pro"}
     """
     # Initialize crawler
     async with AsyncWebCrawler(verbose=False) as crawler:
@@ -591,7 +531,6 @@ async def crawl_urls(request: CrawlRequest):
                 excluded_tags=request.excluded_tags,
                 css_selector=request.css_selector,
                 smart_clean=request.smart_clean,
-                llm_provider=request.llm_provider,
                 llm_model=request.llm_model
             )
             for url in request.urls
