@@ -4,6 +4,7 @@ crawl4ai==0.3.74
 pydantic==2.5.3
 python-multipart==0.0.6
 
-# LLM providers for smart content cleaning (via LiteLLM)
-litellm==1.45.0
+# LLM providers for smart content cleaning
+litellm==1.45.0              # For direct provider routing
+openai==1.35.0               # For LiteLLM Proxy compatibility
 python-dotenv==1.0.0

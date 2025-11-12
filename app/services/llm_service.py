@@ -11,6 +11,13 @@ try:
 except ImportError:
     LITELLM_AVAILABLE = False
 
+# OpenAI SDK for proxy compatibility
+try:
+    from openai import AsyncOpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
 
 # System prompt for LLM content extraction
 CONTENT_EXTRACTION_SYSTEM_PROMPT = """You are a content extraction assistant. Your task is to extract ONLY the main article content from the markdown below.
@@ -74,40 +81,60 @@ async def clean_markdown_with_llm(
         }
     """
 
-    if not LITELLM_AVAILABLE:
-        return {
-            "cleaned_markdown": markdown,
-            "model": model,
-            "error": "LiteLLM not installed. Install with: pip install litellm",
-            "success": False
-        }
+    # Prepare messages
+    messages = [
+        {"role": "system", "content": CONTENT_EXTRACTION_SYSTEM_PROMPT},
+        {"role": "user", "content": build_user_prompt(markdown)}
+    ]
 
     try:
-        # Prepare LiteLLM parameters
-        litellm_params = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": CONTENT_EXTRACTION_SYSTEM_PROMPT},
-                {"role": "user", "content": build_user_prompt(markdown)}
-            ],
-            "max_tokens": 16000
-        }
-
-        # If using LiteLLM Proxy, add proxy configuration
+        # If using LiteLLM Proxy, use OpenAI SDK for better compatibility
         if settings.LITELLM_PROXY_BASE_URL:
-            litellm_params["api_base"] = settings.LITELLM_PROXY_BASE_URL
-            if settings.LITELLM_PROXY_API_KEY:
-                litellm_params["api_key"] = settings.LITELLM_PROXY_API_KEY
+            if not OPENAI_AVAILABLE:
+                return {
+                    "cleaned_markdown": markdown,
+                    "model": model,
+                    "error": "OpenAI SDK not installed. Install with: pip install openai",
+                    "success": False
+                }
 
-        # LiteLLM automatically routes to the correct provider based on model name
-        response = await acompletion(**litellm_params)
+            # Use OpenAI SDK with proxy (like user's working example)
+            client = AsyncOpenAI(
+                api_key=settings.LITELLM_PROXY_API_KEY or "dummy-key",
+                base_url=settings.LITELLM_PROXY_BASE_URL
+            )
 
-        cleaned_markdown = response.choices[0].message.content
+            response = await client.chat.completions.create(
+                model=model,
+                messages=messages,
+                max_tokens=16000
+            )
 
-        # Extract usage info
-        usage = response.usage if hasattr(response, 'usage') else None
-        input_tokens = usage.prompt_tokens if usage else 0
-        output_tokens = usage.completion_tokens if usage else 0
+            cleaned_markdown = response.choices[0].message.content
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+
+        else:
+            # Use LiteLLM for direct provider routing
+            if not LITELLM_AVAILABLE:
+                return {
+                    "cleaned_markdown": markdown,
+                    "model": model,
+                    "error": "LiteLLM not installed. Install with: pip install litellm",
+                    "success": False
+                }
+
+            response = await acompletion(
+                model=model,
+                messages=messages,
+                max_tokens=16000
+            )
+
+            cleaned_markdown = response.choices[0].message.content
+            usage = response.usage if hasattr(response, 'usage') else None
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
 
         return {
             "cleaned_markdown": cleaned_markdown,
