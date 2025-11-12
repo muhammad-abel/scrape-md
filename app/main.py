@@ -2,11 +2,17 @@
 Web Crawling Agent API
 Menggunakan Crawl4AI untuk mengambil konten web dan mengonversinya ke Markdown
 """
+import sys
+import asyncio
+
+# Fix for Windows: Set event loop policy before any async operations
+if sys.platform == "win32":
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 from fastapi import FastAPI, UploadFile, File, Form, HTTPException
 from fastapi.responses import FileResponse
 from crawl4ai import AsyncWebCrawler
 from datetime import datetime
-import asyncio
 import tempfile
 
 from app.models.schemas import (
