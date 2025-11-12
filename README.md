@@ -153,6 +153,17 @@ Health check endpoint
 #### `POST /crawl`
 Crawl satu atau beberapa URL dan return hasil dalam format Markdown
 
+#### `POST /clean-markdown` (🔥 NEW!)
+Clean markdown content dengan LLM untuk remove navbar, footer, ads, dll.
+
+Endpoint khusus untuk cleaning markdown yang **sudah ada** (hasil crawling atau dari file).
+
+**Use Cases:**
+- ✅ Clean hasil crawl yang sudah tersimpan tanpa perlu crawl ulang
+- ✅ Post-process markdown dari source manapun
+- ✅ Batch cleaning multiple markdown files
+- ✅ Reprocess dengan model LLM yang berbeda
+
 ## 🔧 Penggunaan
 
 ### Example 1: Basic - Single URL
@@ -305,7 +316,80 @@ curl -X POST "http://localhost:8000/crawl" \
 
 **Flow:** Pre-filter HTML tags → Crawl → LLM post-process → Clean markdown!
 
-### Request Body Schema
+---
+
+## 🧹 Clean Markdown Endpoint
+
+Endpoint khusus untuk **post-process cleaning** markdown yang sudah ada.
+
+### Example 9: Clean dari File Path
+
+Clean hasil crawl yang sudah tersimpan tanpa perlu crawl ulang:
+
+```bash
+curl -X POST "http://localhost:8000/clean-markdown" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_path": "output_markdown/example_com.md",
+    "save_to_file": true
+  }'
+```
+
+Output: `output_markdown/cleaned_example_com.md`
+
+### Example 10: Clean dari Markdown Content
+
+Clean markdown content langsung dari request body:
+
+```bash
+curl -X POST "http://localhost:8000/clean-markdown" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "markdown_content": "# My Article\n\n[Navigation Menu]\n...\n\nActual content here...",
+    "llm_model": "gpt-4o-mini"
+  }'
+```
+
+### Example 11: Clean dengan Custom Output
+
+```bash
+curl -X POST "http://localhost:8000/clean-markdown" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "file_path": "input/article.md",
+    "save_to_file": true,
+    "output_dir": "cleaned_output",
+    "output_filename": "my_clean_article.md",
+    "llm_model": "openrouter/google/gemini-2.5-flash"
+  }'
+```
+
+### Example 12: Batch Clean Multiple Files (Shell Script)
+
+```bash
+#!/bin/bash
+# Clean semua file .md di directory
+for file in output_markdown/*.md; do
+  echo "Cleaning $file..."
+  curl -X POST "http://localhost:8000/clean-markdown" \
+    -H "Content-Type: application/json" \
+    -d "{
+      \"file_path\": \"$file\",
+      \"save_to_file\": true,
+      \"output_dir\": \"cleaned_output\"
+    }"
+done
+```
+
+**Keuntungan `/clean-markdown` endpoint:**
+- ⚡ Faster - tidak perlu crawl ulang
+- 💰 Cost-effective - reprocess dengan model yang lebih murah
+- 🔄 Flexible - test berbagai model untuk hasil optimal
+- 📦 Batch processing - clean multiple files sekaligus
+
+---
+
+### Request Body Schema (/crawl)
 
 ```json
 {
@@ -364,6 +448,37 @@ curl -X POST "http://localhost:8000/crawl" \
   "total_urls": 1,
   "successful": 1,
   "failed": 0
+}
+```
+
+### Request Body Schema (/clean-markdown)
+
+```json
+{
+  "markdown_content": "string",           // Optional: Markdown content langsung
+  "file_path": "string",                   // Optional: Path ke file .md
+  "llm_model": "claude-3-5-haiku-20241022", // Optional: Model name
+  "save_to_file": false,                   // Optional: Simpan hasil ke file
+  "output_dir": "output_markdown",         // Optional: Direktori output
+  "output_filename": "cleaned_file.md"     // Optional: Custom output filename
+}
+```
+
+**Note:** Minimal salah satu dari `markdown_content` atau `file_path` harus diisi.
+
+### Response Schema (/clean-markdown)
+
+```json
+{
+  "original_length": 15432,
+  "cleaned_length": 8765,
+  "cleaned_markdown": "# Article Title\n\nClean content...",
+  "model": "claude-3-5-haiku-20241022",
+  "input_tokens": 5243,
+  "output_tokens": 2156,
+  "status": "success",
+  "file_path": "output_markdown/cleaned_example.md",  // null jika save_to_file=false
+  "error": null  // Error message jika status="failed"
 }
 ```
 

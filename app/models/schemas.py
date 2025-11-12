@@ -76,3 +76,33 @@ class DebugCrawlResponse(BaseModel):
     total_urls: int
     successful: int
     failed: int
+
+
+class CleanMarkdownRequest(BaseModel):
+    """Request schema for cleaning markdown content"""
+    markdown_content: Optional[str] = None
+    file_path: Optional[str] = None
+    llm_model: Optional[str] = "claude-3-5-haiku-20241022"
+    save_to_file: Optional[bool] = False
+    output_dir: Optional[str] = "output_markdown"
+    output_filename: Optional[str] = None
+
+    @validator('markdown_content', 'file_path')
+    def validate_content_or_file(cls, v, values, field):
+        # At least one must be provided
+        if field.name == 'file_path' and not v and not values.get('markdown_content'):
+            raise ValueError('Either markdown_content or file_path must be provided')
+        return v
+
+
+class CleanMarkdownResponse(BaseModel):
+    """Response schema for clean-markdown endpoint"""
+    original_length: int
+    cleaned_length: int
+    cleaned_markdown: str
+    model: str
+    input_tokens: int
+    output_tokens: int
+    status: str
+    file_path: Optional[str] = None
+    error: Optional[str] = None
