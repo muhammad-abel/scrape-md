@@ -36,6 +36,18 @@ app = FastAPI(
 )
 
 
+@app.on_event("startup")
+async def startup_event():
+    """
+    Startup event to ensure Windows event loop policy is set.
+    This runs in each uvicorn worker process.
+    """
+    if sys.platform == "win32":
+        # Re-apply Windows fix for each worker
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+        print("✓ Windows event loop policy applied (WindowsSelectorEventLoopPolicy)")
+
+
 @app.get("/")
 async def root():
     """
