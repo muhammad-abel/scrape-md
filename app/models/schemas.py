@@ -1,7 +1,7 @@
 """
 Pydantic models for request/response schemas
 """
-from pydantic import BaseModel, validator
+from pydantic import BaseModel, field_validator, model_validator
 from typing import List, Optional, Dict, Any
 import re
 
@@ -21,7 +21,8 @@ class CrawlRequest(BaseModel):
     smart_clean: Optional[bool] = False
     llm_model: Optional[str] = "claude-3-5-haiku-20241022"
 
-    @validator('urls')
+    @field_validator('urls')
+    @classmethod
     def validate_urls(cls, v):
         if not v:
             raise ValueError('URLs list cannot be empty')
@@ -87,12 +88,12 @@ class CleanMarkdownRequest(BaseModel):
     output_dir: Optional[str] = "output_markdown"
     output_filename: Optional[str] = None
 
-    @validator('markdown_content', 'file_path')
-    def validate_content_or_file(cls, v, values, field):
+    @model_validator(mode='after')
+    def validate_content_or_file(self):
         # At least one must be provided
-        if field.name == 'file_path' and not v and not values.get('markdown_content'):
+        if not self.markdown_content and not self.file_path:
             raise ValueError('Either markdown_content or file_path must be provided')
-        return v
+        return self
 
 
 class CleanMarkdownResponse(BaseModel):
