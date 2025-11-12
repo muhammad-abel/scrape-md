@@ -104,15 +104,22 @@ HTTPS_PROXY=https://proxy.example.com:8080
 
 ### 4. Jalankan server
 
+**Recommended** (includes Windows fix):
 ```bash
 python main.py
 ```
 
-Atau dengan uvicorn:
-
+**Alternative** dengan uvicorn langsung:
 ```bash
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
 ```
+
+**⚠️ Windows Users:**
+Jika menggunakan uvicorn langsung dan mendapat error `NotImplementedError`, gunakan:
+```bash
+python main.py
+```
+Script ini sudah include Windows event loop policy fix untuk Playwright compatibility.
 
 Server akan berjalan di `http://localhost:8000`
 
