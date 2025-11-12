@@ -34,23 +34,48 @@ pip install -r requirements.txt
 
 ### 3. Setup API Keys (Optional - hanya untuk smart_clean)
 
-Jika ingin menggunakan fitur **smart_clean** dengan LLM:
+Jika ingin menggunakan fitur **smart_clean** dengan LLM, ada 3 opsi:
+
+#### Option 1: Direct Provider APIs (Recommended)
 
 ```bash
 # Copy .env.example ke .env
 cp .env.example .env
 
-# Edit .env dan tambahkan API key
-# Untuk Anthropic Claude:
+# Edit .env dan tambahkan API key provider pilihan Anda
 ANTHROPIC_API_KEY=your_key_here
-
-# Atau untuk OpenAI GPT:
+# atau
 OPENAI_API_KEY=your_key_here
+# atau
+GEMINI_API_KEY=your_key_here
 ```
 
 **Get API Keys:**
 - Anthropic: https://console.anthropic.com/
 - OpenAI: https://platform.openai.com/api-keys
+- Google Gemini: https://makersuite.google.com/app/apikey
+
+#### Option 2: LiteLLM Proxy Server
+
+Untuk setup terpusat, load balancing, dan caching:
+
+```bash
+# .env
+LITELLM_PROXY_BASE_URL=http://localhost:4000
+LITELLM_PROXY_API_KEY=your_proxy_key
+```
+
+Setup LiteLLM Proxy: https://docs.litellm.ai/docs/proxy/quick_start
+
+#### Option 3: HTTP Proxy
+
+Jika perlu routing via HTTP proxy:
+
+```bash
+# .env
+HTTP_PROXY=http://proxy.example.com:8080
+HTTPS_PROXY=https://proxy.example.com:8080
+```
 
 ### 4. Jalankan server
 
