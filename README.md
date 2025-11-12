@@ -34,15 +34,47 @@ pip install -r requirements.txt
 
 ### 3. Setup API Keys (Optional - hanya untuk smart_clean)
 
-Jika ingin menggunakan fitur **smart_clean** dengan LLM, ada 3 opsi:
+Jika ingin menggunakan fitur **smart_clean** dengan LLM, kami **MEREKOMENDASIKAN** menggunakan **LiteLLM Proxy**:
 
-#### Option 1: Direct Provider APIs (Recommended)
+#### Option 1: LiteLLM Proxy Server (RECOMMENDED) ⭐
+
+Setup terpusat dengan load balancing, caching, dan cost tracking:
 
 ```bash
 # Copy .env.example ke .env
 cp .env.example .env
 
-# Edit .env dan tambahkan API key provider pilihan Anda
+# Edit .env dan configure LiteLLM Proxy
+LITELLM_PROXY_BASE_URL=http://localhost:4000
+LITELLM_PROXY_API_KEY=your_proxy_key
+```
+
+**Keuntungan LiteLLM Proxy:**
+- ✅ Single endpoint untuk semua LLM providers
+- ✅ Built-in load balancing dan fallback
+- ✅ Request caching untuk mengurangi cost
+- ✅ Usage tracking dan cost management
+- ✅ Tidak perlu manage individual provider keys di app
+
+**Setup LiteLLM Proxy:** https://docs.litellm.ai/docs/proxy/quick_start
+
+#### Option 2: LiteLLM API (Managed Service)
+
+Gunakan managed service LiteLLM (no self-hosting):
+
+```bash
+# .env
+LITELLM_API_KEY=your_litellm_api_key
+```
+
+Get your key: https://litellm.ai/
+
+#### Option 3: Direct Provider APIs (Fallback)
+
+Jika tidak menggunakan LiteLLM Proxy/API, set provider keys langsung:
+
+```bash
+# .env - pilih salah satu provider
 ANTHROPIC_API_KEY=your_key_here
 # atau
 OPENAI_API_KEY=your_key_here
@@ -55,19 +87,9 @@ GEMINI_API_KEY=your_key_here
 - OpenAI: https://platform.openai.com/api-keys
 - Google Gemini: https://makersuite.google.com/app/apikey
 
-#### Option 2: LiteLLM Proxy Server
+**Note:** Approach ini tidak mendapat benefit dari proxy (caching, load balancing, dll)
 
-Untuk setup terpusat, load balancing, dan caching:
-
-```bash
-# .env
-LITELLM_PROXY_BASE_URL=http://localhost:4000
-LITELLM_PROXY_API_KEY=your_proxy_key
-```
-
-Setup LiteLLM Proxy: https://docs.litellm.ai/docs/proxy/quick_start
-
-#### Option 3: HTTP Proxy
+#### HTTP Proxy Settings
 
 Jika perlu routing via HTTP proxy:
 
