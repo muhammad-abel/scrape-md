@@ -52,7 +52,7 @@ Remember: Return ONLY the cleaned markdown content, nothing else. No explanation
 
 async def clean_markdown_with_llm(
     markdown: str,
-    model: str = "claude-3-5-haiku-20241022"
+    model: str = "openrouter/google/gemini-2.5-flash"
 ) -> Dict[str, Any]:
     """
     Clean markdown content menggunakan LLM (via LiteLLM) untuk remove navbar, footer, ads, dll.
