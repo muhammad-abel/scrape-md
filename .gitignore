@@ -42,6 +42,10 @@ ENV/
 output_markdown/
 *.md.backup
 
+# Backup files
+*.old
+main.py.old
+
 # Logs
 *.log
 logs/
