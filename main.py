@@ -42,7 +42,7 @@ class CrawlRequest(BaseModel):
 
     # Smart cleaning with LLM (post-process via LiteLLM)
     smart_clean: Optional[bool] = False
-    llm_model: Optional[str] = "claude-3-5-haiku-20241022"  # LiteLLM auto-detects provider from model name
+    llm_model: Optional[str] = "openrouter/google/gemini-2.5-flash"  # LiteLLM auto-detects provider from model name
 
     @validator('urls')
     def validate_urls(cls, v):
