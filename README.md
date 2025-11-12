@@ -116,6 +116,30 @@ uvicorn main:app --reload --host 0.0.0.0 --port 8000
 
 Server akan berjalan di `http://localhost:8000`
 
+## 🏗️ Project Structure
+
+Project ini menggunakan **modular architecture** untuk better maintainability:
+
+```
+scrape-md/
+├── app/                      # Application package
+│   ├── config.py             # Configuration & settings
+│   ├── main.py               # FastAPI routes
+│   ├── models/               # Pydantic schemas
+│   ├── services/             # Business logic (crawler, LLM)
+│   └── utils/                # Utilities (file, HTML)
+├── main.py                   # Entry point
+└── STRUCTURE.md              # Detailed structure documentation
+```
+
+**Keuntungan:**
+- ✅ Separation of Concerns - Code terorganisir berdasarkan fungsi
+- ✅ Better Testability - Setiap module bisa di-test independen
+- ✅ Easier Maintenance - Mudah menemukan & modify code
+- ✅ Scalability - Mudah menambah features tanpa mengubah existing code
+
+Lihat [STRUCTURE.md](STRUCTURE.md) untuk dokumentasi lengkap tentang arsitektur project.
+
 ## 📖 API Documentation
 
 ### Endpoints
