@@ -318,74 +318,103 @@ curl -X POST "http://localhost:8000/crawl" \
 
 ---
 
-## 🧹 Clean Markdown Endpoint
+## 🧹 Clean Markdown Endpoint (File Upload/Download)
 
-Endpoint khusus untuk **post-process cleaning** markdown yang sudah ada.
+Endpoint **simple** untuk post-process cleaning markdown yang sudah ada.
 
-### Example 9: Clean dari File Path
+**Workflow:**
+1. 📤 Upload file `.md`
+2. 🤖 LLM clean navbar, footer, ads
+3. 📥 Download file `.md` yang bersih
 
-Clean hasil crawl yang sudah tersimpan tanpa perlu crawl ulang:
+### Example 9: Basic Upload & Download
 
-```bash
-curl -X POST "http://localhost:8000/clean-markdown" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "file_path": "output_markdown/example_com.md",
-    "save_to_file": true
-  }'
-```
-
-Output: `output_markdown/cleaned_example_com.md`
-
-### Example 10: Clean dari Markdown Content
-
-Clean markdown content langsung dari request body:
+Upload file markdown dan download hasil yang sudah di-clean:
 
 ```bash
 curl -X POST "http://localhost:8000/clean-markdown" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "markdown_content": "# My Article\n\n[Navigation Menu]\n...\n\nActual content here...",
-    "llm_model": "gpt-4o-mini"
-  }'
+  -F "file=@input.md" \
+  -o cleaned_output.md
 ```
 
-### Example 11: Clean dengan Custom Output
+**Output:** File `cleaned_output.md` yang sudah bersih
+
+### Example 10: Custom LLM Model
+
+Pilih model LLM yang berbeda:
 
 ```bash
+# Menggunakan GPT-4o-mini
 curl -X POST "http://localhost:8000/clean-markdown" \
-  -H "Content-Type: application/json" \
-  -d '{
-    "file_path": "input/article.md",
-    "save_to_file": true,
-    "output_dir": "cleaned_output",
-    "output_filename": "my_clean_article.md",
-    "llm_model": "openrouter/google/gemini-2.5-flash"
-  }'
+  -F "file=@article.md" \
+  -F "llm_model=gpt-4o-mini" \
+  -o cleaned_article.md
+
+# Menggunakan Claude Sonnet
+curl -X POST "http://localhost:8000/clean-markdown" \
+  -F "file=@blog.md" \
+  -F "llm_model=claude-3-5-sonnet-20241022" \
+  -o cleaned_blog.md
 ```
 
-### Example 12: Batch Clean Multiple Files (Shell Script)
+### Example 11: Batch Clean Multiple Files
+
+Clean semua file .md di directory:
 
 ```bash
 #!/bin/bash
-# Clean semua file .md di directory
 for file in output_markdown/*.md; do
-  echo "Cleaning $file..."
+  filename=$(basename "$file")
+  echo "Cleaning $filename..."
   curl -X POST "http://localhost:8000/clean-markdown" \
-    -H "Content-Type: application/json" \
-    -d "{
-      \"file_path\": \"$file\",
-      \"save_to_file\": true,
-      \"output_dir\": \"cleaned_output\"
-    }"
+    -F "file=@$file" \
+    -F "llm_model=openrouter/google/gemini-2.5-flash" \
+    -o "cleaned_output/cleaned_$filename"
 done
 ```
 
-**Keuntungan `/clean-markdown` endpoint:**
-- ⚡ Faster - tidak perlu crawl ulang
-- 💰 Cost-effective - reprocess dengan model yang lebih murah
-- 🔄 Flexible - test berbagai model untuk hasil optimal
-- 📦 Batch processing - clean multiple files sekaligus
+### Example 12: Python Script
+
+```python
+import requests
+
+# Upload dan clean single file
+with open('input.md', 'rb') as f:
+    files = {'file': f}
+    data = {'llm_model': 'openrouter/google/gemini-2.5-flash'}
+
+    response = requests.post(
+        'http://localhost:8000/clean-markdown',
+        files=files,
+        data=data
+    )
+
+    # Check headers untuk metadata
+    print(f"Original length: {response.headers.get('X-Original-Length')}")
+    print(f"Cleaned length: {response.headers.get('X-Cleaned-Length')}")
+    print(f"Model used: {response.headers.get('X-Model-Used')}")
+    print(f"Tokens: {response.headers.get('X-Input-Tokens')} input, {response.headers.get('X-Output-Tokens')} output")
+
+    # Save cleaned file
+    with open('cleaned_output.md', 'wb') as f:
+        f.write(response.content)
+
+print("✓ File cleaned successfully!")
+```
+
+**Response Headers (Metadata):**
+- `X-Original-Length`: Panjang file original
+- `X-Cleaned-Length`: Panjang file setelah cleaning
+- `X-Model-Used`: Model LLM yang digunakan
+- `X-Input-Tokens`: Token yang digunakan untuk input
+- `X-Output-Tokens`: Token yang digunakan untuk output
+
+**Keuntungan endpoint ini:**
+- ✅ **Simple** - Upload → Download (no complex JSON)
+- ⚡ **Fast** - Tidak perlu crawl ulang
+- 💰 **Cost-effective** - Test berbagai model dengan file yang sama
+- 📦 **Batch-friendly** - Easy scripting untuk batch processing
+- 📊 **Metadata** - Info lengkap di response headers
 
 ---
 
@@ -448,37 +477,6 @@ done
   "total_urls": 1,
   "successful": 1,
   "failed": 0
-}
-```
-
-### Request Body Schema (/clean-markdown)
-
-```json
-{
-  "markdown_content": "string",           // Optional: Markdown content langsung
-  "file_path": "string",                   // Optional: Path ke file .md
-  "llm_model": "claude-3-5-haiku-20241022", // Optional: Model name
-  "save_to_file": false,                   // Optional: Simpan hasil ke file
-  "output_dir": "output_markdown",         // Optional: Direktori output
-  "output_filename": "cleaned_file.md"     // Optional: Custom output filename
-}
-```
-
-**Note:** Minimal salah satu dari `markdown_content` atau `file_path` harus diisi.
-
-### Response Schema (/clean-markdown)
-
-```json
-{
-  "original_length": 15432,
-  "cleaned_length": 8765,
-  "cleaned_markdown": "# Article Title\n\nClean content...",
-  "model": "claude-3-5-haiku-20241022",
-  "input_tokens": 5243,
-  "output_tokens": 2156,
-  "status": "success",
-  "file_path": "output_markdown/cleaned_example.md",  // null jika save_to_file=false
-  "error": null  // Error message jika status="failed"
 }
 ```
 

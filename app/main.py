@@ -2,17 +2,17 @@
 Web Crawling Agent API
 Menggunakan Crawl4AI untuk mengambil konten web dan mengonversinya ke Markdown
 """
-from fastapi import FastAPI
+from fastapi import FastAPI, UploadFile, File, Form, HTTPException
+from fastapi.responses import FileResponse
 from crawl4ai import AsyncWebCrawler
 from datetime import datetime
 import asyncio
+import tempfile
 
 from app.models.schemas import (
     CrawlRequest,
     CrawlResponse,
-    DebugCrawlResponse,
-    CleanMarkdownRequest,
-    CleanMarkdownResponse
+    DebugCrawlResponse
 )
 from app.services.crawler_service import crawl_single_url, debug_crawl_single_url
 from app.services.llm_service import clean_markdown_with_llm
@@ -160,147 +160,108 @@ async def debug_crawl_endpoint(request: CrawlRequest):
     )
 
 
-@app.post("/clean-markdown", response_model=CleanMarkdownResponse)
-async def clean_markdown_endpoint(request: CleanMarkdownRequest):
+@app.post("/clean-markdown")
+async def clean_markdown_endpoint(
+    file: UploadFile = File(..., description="Markdown file to clean"),
+    llm_model: str = Form(default="openrouter/google/gemini-2.5-flash", description="LLM model name")
+):
     """
-    Clean markdown content dengan LLM untuk remove navbar, footer, ads, dll.
+    Upload markdown file (.md) dan download hasil yang sudah di-clean dengan LLM.
 
-    Endpoint ini khusus untuk cleaning markdown yang sudah ada (hasil crawling atau dari file).
-    Berguna untuk:
-    - Clean hasil crawl yang sudah tersimpan tanpa perlu crawl ulang
-    - Post-process markdown dari source manapun
-    - Batch cleaning multiple markdown files
+    **Simple workflow:**
+    1. Upload file .md
+    2. LLM akan clean navbar, footer, ads, dll
+    3. Download file .md yang sudah bersih
 
-    Parameters:
-    - markdown_content: (Optional) Markdown content string langsung
-    - file_path: (Optional) Path ke file .md yang akan di-clean
-    - llm_model: (Optional) Model name (LiteLLM auto-detects provider) (default: claude-3-5-haiku-20241022)
-    - save_to_file: (Optional) Simpan hasil cleaned ke file
-    - output_dir: (Optional) Direktori untuk menyimpan file (default: output_markdown)
-    - output_filename: (Optional) Custom output filename (default: cleaned_<original_name>.md)
+    **Parameters:**
+    - file: File .md yang akan di-upload (multipart/form-data)
+    - llm_model: (Optional) Model name untuk cleaning (default: openrouter/google/gemini-2.5-flash)
 
-    Returns:
-    - original_length: Panjang markdown original
-    - cleaned_length: Panjang markdown setelah cleaning
-    - cleaned_markdown: Hasil markdown yang sudah di-clean
-    - model: Model yang digunakan
-    - input_tokens: Token yang digunakan untuk input
-    - output_tokens: Token yang digunakan untuk output
-    - status: Status cleaning (success/failed)
-    - file_path: Path ke file hasil cleaning (jika save_to_file=true)
-    - error: Error message (jika ada)
+    **Supported Models:**
+    - OpenRouter: openrouter/google/gemini-2.5-flash, openrouter/anthropic/claude-3.5-sonnet
+    - Anthropic: claude-3-5-haiku-20241022, claude-3-5-sonnet-20241022
+    - OpenAI: gpt-4o-mini, gpt-4o
+    - Google: gemini-pro, gemini-1.5-pro
 
-    Examples:
-    - Clean from content: {"markdown_content": "# Title\n\nContent..."}
-    - Clean from file: {"file_path": "output_markdown/example.md"}
-    - Clean and save: {"file_path": "input.md", "save_to_file": true}
-    - Custom model: {"markdown_content": "...", "llm_model": "gpt-4o-mini"}
-    - OpenRouter: {"file_path": "input.md", "llm_model": "openrouter/google/gemini-2.5-flash"}
+    **Returns:**
+    - File download (.md) - Cleaned markdown file
+
+    **Example (curl):**
+    ```bash
+    curl -X POST "http://localhost:8000/clean-markdown" \\
+      -F "file=@input.md" \\
+      -F "llm_model=openrouter/google/gemini-2.5-flash" \\
+      -o cleaned_output.md
+    ```
+
+    **Example (Python requests):**
+    ```python
+    import requests
+
+    with open('input.md', 'rb') as f:
+        files = {'file': f}
+        data = {'llm_model': 'openrouter/google/gemini-2.5-flash'}
+        response = requests.post('http://localhost:8000/clean-markdown', files=files, data=data)
+
+    with open('cleaned_output.md', 'wb') as f:
+        f.write(response.content)
+    ```
     """
     try:
-        # Get markdown content
-        markdown_content = ""
-
-        if request.markdown_content:
-            # Use content from request body
-            markdown_content = request.markdown_content
-        elif request.file_path:
-            # Read from file
-            file_path = Path(request.file_path)
-            if not file_path.exists():
-                return CleanMarkdownResponse(
-                    original_length=0,
-                    cleaned_length=0,
-                    cleaned_markdown="",
-                    model=request.llm_model,
-                    input_tokens=0,
-                    output_tokens=0,
-                    status="failed",
-                    error=f"File not found: {request.file_path}"
-                )
-
-            with open(file_path, 'r', encoding='utf-8') as f:
-                markdown_content = f.read()
-        else:
-            return CleanMarkdownResponse(
-                original_length=0,
-                cleaned_length=0,
-                cleaned_markdown="",
-                model=request.llm_model,
-                input_tokens=0,
-                output_tokens=0,
-                status="failed",
-                error="Either markdown_content or file_path must be provided"
+        # Validate file extension
+        if not file.filename.endswith('.md'):
+            raise HTTPException(
+                status_code=400,
+                detail="Only .md files are supported. Please upload a markdown file."
             )
 
-        original_length = len(markdown_content)
+        # Read uploaded file content
+        markdown_content = await file.read()
+        markdown_content = markdown_content.decode('utf-8')
 
         # Clean markdown dengan LLM
         llm_result = await clean_markdown_with_llm(
             markdown_content,
-            model=request.llm_model
+            model=llm_model
         )
 
         if not llm_result["success"]:
-            return CleanMarkdownResponse(
-                original_length=original_length,
-                cleaned_length=0,
-                cleaned_markdown=markdown_content,  # Return original on error
-                model=request.llm_model,
-                input_tokens=0,
-                output_tokens=0,
-                status="failed",
-                error=llm_result.get("error", "Unknown error")
+            raise HTTPException(
+                status_code=500,
+                detail=f"LLM cleaning failed: {llm_result.get('error', 'Unknown error')}"
             )
 
         cleaned_markdown = llm_result["cleaned_markdown"]
-        cleaned_length = len(cleaned_markdown)
 
-        # Save to file if requested
-        saved_file_path = None
-        if request.save_to_file:
-            # Generate output filename
-            if request.output_filename:
-                output_filename = request.output_filename
-            elif request.file_path:
-                # Use original filename with "cleaned_" prefix
-                original_filename = Path(request.file_path).name
-                output_filename = f"cleaned_{original_filename}"
-            else:
-                # Generate timestamp-based filename
-                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-                output_filename = f"cleaned_{timestamp}.md"
+        # Save to temporary file
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False, encoding='utf-8') as tmp_file:
+            tmp_file.write(cleaned_markdown)
+            tmp_file_path = tmp_file.name
 
-            # Save file
-            output_path = os.path.join(request.output_dir, output_filename)
-            Path(request.output_dir).mkdir(parents=True, exist_ok=True)
+        # Generate cleaned filename
+        original_filename = file.filename
+        cleaned_filename = f"cleaned_{original_filename}"
 
-            with open(output_path, 'w', encoding='utf-8') as f:
-                f.write(cleaned_markdown)
-
-            saved_file_path = output_path
-
-        return CleanMarkdownResponse(
-            original_length=original_length,
-            cleaned_length=cleaned_length,
-            cleaned_markdown=cleaned_markdown,
-            model=llm_result["model"],
-            input_tokens=llm_result["input_tokens"],
-            output_tokens=llm_result["output_tokens"],
-            status="success",
-            file_path=saved_file_path
+        # Return file for download
+        return FileResponse(
+            path=tmp_file_path,
+            media_type='text/markdown',
+            filename=cleaned_filename,
+            headers={
+                "X-Original-Length": str(len(markdown_content)),
+                "X-Cleaned-Length": str(len(cleaned_markdown)),
+                "X-Model-Used": llm_result["model"],
+                "X-Input-Tokens": str(llm_result["input_tokens"]),
+                "X-Output-Tokens": str(llm_result["output_tokens"])
+            }
         )
 
+    except HTTPException:
+        raise
     except Exception as e:
-        return CleanMarkdownResponse(
-            original_length=0,
-            cleaned_length=0,
-            cleaned_markdown="",
-            model=request.llm_model,
-            input_tokens=0,
-            output_tokens=0,
-            status="failed",
-            error=str(e)
+        raise HTTPException(
+            status_code=500,
+            detail=f"Error processing file: {str(e)}"
         )
 
 
