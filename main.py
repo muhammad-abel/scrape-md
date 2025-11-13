@@ -12,13 +12,36 @@ import os
 from pathlib import Path
 import asyncio
 from dotenv import load_dotenv
+import logging
 
-# LLM provider via LiteLLM (optional - only imported if smart_clean is used)
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    datefmt='%Y-%m-%d %H:%M:%S'
+)
+logger = logging.getLogger(__name__)
+
+# LLM provider via OpenAI SDK (compatible with LiteLLM Proxy)
+try:
+    from openai import AsyncOpenAI
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+# Fallback to litellm direct if OpenAI SDK not available
 try:
     from litellm import acompletion
     LITELLM_AVAILABLE = True
 except ImportError:
     LITELLM_AVAILABLE = False
+
+# Markdown stripping service
+try:
+    from app.services.markdown_strip_service import strip_markdown
+    MARKDOWN_STRIP_AVAILABLE = True
+except ImportError:
+    MARKDOWN_STRIP_AVAILABLE = False
 
 # Load environment variables
 load_dotenv()
@@ -40,9 +63,12 @@ class CrawlRequest(BaseModel):
     excluded_tags: Optional[List[str]] = None
     css_selector: Optional[str] = None
 
-    # Smart cleaning with LLM (post-process via LiteLLM)
+    # Smart cleaning with LLM (post-process via LiteLLM Proxy)
     smart_clean: Optional[bool] = False
-    llm_model: Optional[str] = "claude-3-5-haiku-20241022"  # LiteLLM auto-detects provider from model name
+    llm_model: Optional[str] = "azure/gpt-5-mini"  # Model name for LiteLLM Proxy
+
+    # Markdown stripping (final cleanup - remove links, images, HTML)
+    markdown_strip: Optional[bool] = False
 
     @validator('urls')
     def validate_urls(cls, v):
@@ -152,45 +178,63 @@ def build_excluded_tags(content_only: bool = False, custom_tags: Optional[List[s
 
 async def clean_markdown_with_llm(
     markdown: str,
-    model: str = "claude-3-5-haiku-20241022"
+    model: str = "openrouter/google/gemini-2.5-flash"
 ) -> Dict[str, Any]:
     """
-    Clean markdown content menggunakan LLM (via LiteLLM) untuk remove navbar, footer, ads, dll.
+    Clean markdown content menggunakan LLM untuk remove navbar, footer, ads, dll.
 
     Parameters:
     - markdown: Raw markdown content
-    - model: Model name (LiteLLM auto-detects provider)
-      Examples: "claude-3-5-haiku-20241022", "gpt-4o-mini", "gemini-pro"
+    - model: Model name (defaults to gemini-2.5-flash via OpenRouter)
+      Examples: "openrouter/google/gemini-2.5-flash", "openrouter/anthropic/claude-3.5-sonnet"
 
     Returns:
     - Dict dengan cleaned_markdown dan metadata
     """
 
-    if not LITELLM_AVAILABLE:
+    # Check if OpenAI SDK available (preferred for LiteLLM Proxy)
+    if not OPENAI_AVAILABLE and not LITELLM_AVAILABLE:
         return {
             "cleaned_markdown": markdown,
             "model": model,
-            "error": "LiteLLM not installed. Install with: pip install litellm",
+            "error": "OpenAI SDK or LiteLLM not installed. Install with: pip install openai",
             "success": False
         }
 
     # Prompt untuk LLM
     system_prompt = """You are a content extraction assistant. Your task is to extract ONLY the main article content from the markdown below.
 
-RULES:
-1. Remove navigation menus, headers, footers
-2. Remove sidebars, advertisements, promotional content
-3. Remove "related posts", "you may also like", "trending now", "popular articles"
-4. Remove social media widgets, share buttons, comment sections
-5. Remove author bio/bylines (unless essential to article)
-6. Remove newsletter signup forms, call-to-action buttons
-7. Keep the main article title and body content
-8. Keep images/figures that are part of the main article
-9. Preserve the original markdown formatting exactly
-10. Do NOT summarize, paraphrase, or modify the content - extract as-is
-11. If you're unsure whether something is content or navigation, include it
+RULES - REMOVE THESE (BE AGGRESSIVE):
+1. Navigation menus, headers, footers, breadcrumbs
+2. Sidebars, advertisements, promotional banners
+3. "Related posts", "Berita Terkait", "Rekomendasi untuk Anda", "You may also like", "Trending now", "Popular articles"
+4. Social media widgets, share buttons ("BAGIKAN", "Share"), comment sections
+5. Author bio/bylines (unless essential to understanding the article)
+6. Newsletter signup forms, subscription prompts, call-to-action buttons
+7. Internal cross-links like "Baca juga:", "Read more:", "See also:", "Simak Video:", "Saksikan Live:"
+8. Links to other articles that are NOT part of the main narrative
+9. Category tags, topic tags (e.g., "prabowo subianto", "luwu utara")
+10. "ADVERTISEMENT", "Sponsored", "Promoted content" sections
+11. Footer sections (Layanan, Informasi, Jaringan Media, Kategori)
+12. Video embeds that are NOT central to the article
+13. Copyright notices, publication metadata
+14. Search trending sections ("Yang sedang ramai dicari")
 
-OUTPUT: Return ONLY the cleaned markdown, nothing else."""
+RULES - KEEP THESE:
+1. The main article title (headline)
+2. All body paragraphs that are part of the main article narrative
+3. Images/figures that illustrate the main content
+4. Inline quotes from sources
+5. Essential data, tables, charts
+6. Section headers/subheadings within the article body
+
+FORMATTING:
+- Preserve the original markdown formatting exactly
+- Do NOT summarize, paraphrase, or rewrite - extract as-is
+- If unsure whether standalone text/link is navigation or content, REMOVE it (be aggressive with removal)
+- Keep ONLY the essential article body
+
+OUTPUT: Return ONLY the cleaned markdown, nothing else. No explanations, no comments, no metadata."""
 
     user_prompt = f"""Extract the main article content from this markdown:
 
@@ -200,35 +244,65 @@ OUTPUT: Return ONLY the cleaned markdown, nothing else."""
 
 Remember: Return ONLY the cleaned markdown content, nothing else. No explanations, no comments."""
 
+    # Messages for LLM
+    messages = [
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_prompt}
+    ]
+
     try:
-        # Prepare LiteLLM parameters
-        litellm_params = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt}
-            ],
-            "max_tokens": 16000
-        }
-
-        # If using LiteLLM Proxy, add proxy configuration
+        # Get proxy configuration from environment
         proxy_base_url = os.getenv("LITELLM_PROXY_BASE_URL")
-        proxy_api_key = os.getenv("LITELLM_PROXY_API_KEY")
+        proxy_api_key = os.getenv("LITELLM_PROXY_API_KEY", "dummy-key")
 
-        if proxy_base_url:
-            litellm_params["api_base"] = proxy_base_url
-            if proxy_api_key:
-                litellm_params["api_key"] = proxy_api_key
+        # Use OpenAI SDK with LiteLLM Proxy (like your working example!)
+        if proxy_base_url and OPENAI_AVAILABLE:
+            client = AsyncOpenAI(
+                api_key=proxy_api_key,
+                base_url=proxy_base_url
+            )
 
-        # LiteLLM automatically routes to the correct provider based on model name
-        response = await acompletion(**litellm_params)
+            # Prepare completion parameters
+            # Note: Azure GPT-4o/GPT-5 models require 'max_completion_tokens' instead of 'max_tokens'
+            completion_params = {
+                "model": model,
+                "messages": messages,
+            }
 
-        cleaned_markdown = response.choices[0].message.content
+            # Use max_completion_tokens for Azure models, max_tokens for others
+            # Azure models: gpt-4o, gpt-5, o1, etc.
+            if "azure" in model.lower() or "gpt-4o" in model.lower() or "gpt-5" in model.lower() or "o1" in model.lower():
+                completion_params["max_completion_tokens"] = 16000
+            else:
+                completion_params["max_tokens"] = 16000
 
-        # Extract usage info
-        usage = response.usage if hasattr(response, 'usage') else None
-        input_tokens = usage.prompt_tokens if usage else 0
-        output_tokens = usage.completion_tokens if usage else 0
+            response = await client.chat.completions.create(**completion_params)
+
+            cleaned_markdown = response.choices[0].message.content
+            usage = response.usage
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+
+        # Fallback to litellm direct (for non-proxy usage)
+        elif LITELLM_AVAILABLE:
+            response = await acompletion(
+                model=model,
+                messages=messages,
+                max_tokens=16000
+            )
+
+            cleaned_markdown = response.choices[0].message.content
+            usage = response.usage if hasattr(response, 'usage') else None
+            input_tokens = usage.prompt_tokens if usage else 0
+            output_tokens = usage.completion_tokens if usage else 0
+
+        else:
+            return {
+                "cleaned_markdown": markdown,
+                "model": model,
+                "error": "No LLM client available. Set LITELLM_PROXY_BASE_URL or install litellm.",
+                "success": False
+            }
 
         return {
             "cleaned_markdown": cleaned_markdown,
@@ -289,7 +363,8 @@ async def crawl_single_url(
     excluded_tags: Optional[List[str]] = None,
     css_selector: Optional[str] = None,
     smart_clean: bool = False,
-    llm_model: str = "claude-3-5-haiku-20241022"
+    llm_model: str = "azure/gpt-5-mini",
+    markdown_strip: bool = False
 ) -> CrawlResult:
     """
     Crawl satu URL dan return hasilnya
@@ -306,6 +381,9 @@ async def crawl_single_url(
     - llm_model: Model name (LiteLLM auto-detects provider)
     """
     try:
+        logger.info(f"🌐 [CRAWL] Starting crawl for URL: {url}")
+        logger.info(f"🌐 [CRAWL] Pipeline: HTML filter={'✅' if content_only else '❌'} | LLM clean={'✅' if smart_clean else '❌'} | Markdown strip={'✅' if markdown_strip else '❌'}")
+
         # Build excluded tags list
         tags_to_exclude = build_excluded_tags(content_only, excluded_tags)
 
@@ -330,13 +408,25 @@ async def crawl_single_url(
         # Smart clean dengan LLM jika diminta
         llm_metadata = {}
         if smart_clean and markdown_content:
+            logger.info(f"🤖 [LLM] Starting smart clean for URL: {url}")
+            logger.info(f"🤖 [LLM] Model: {llm_model}")
+            logger.info(f"🤖 [LLM] Input length: {len(markdown_content)} chars")
+
             llm_result = await clean_markdown_with_llm(
                 markdown_content,
                 model=llm_model
             )
 
             if llm_result["success"]:
+                original_len = len(markdown_content)
                 markdown_content = llm_result["cleaned_markdown"]
+                cleaned_len = len(markdown_content)
+                reduction = ((original_len - cleaned_len) / original_len * 100) if original_len > 0 else 0
+
+                logger.info(f"✅ [LLM] Smart clean successful")
+                logger.info(f"✅ [LLM] Output length: {cleaned_len} chars (reduced {reduction:.1f}%)")
+                logger.info(f"✅ [LLM] Tokens used: {llm_result['input_tokens']} input, {llm_result['output_tokens']} output")
+
                 llm_metadata = {
                     "llm_model": llm_result["model"],
                     "input_tokens": llm_result["input_tokens"],
@@ -344,10 +434,46 @@ async def crawl_single_url(
                     "llm_cleaning": "success"
                 }
             else:
+                logger.error(f"❌ [LLM] Smart clean failed: {llm_result.get('error', 'Unknown error')}")
                 llm_metadata = {
                     "llm_model": llm_model,
                     "llm_cleaning": "failed",
                     "llm_error": llm_result.get("error", "Unknown error")
+                }
+
+        # Markdown strip (final cleanup - remove links, images, HTML)
+        strip_metadata = {}
+        if markdown_strip and markdown_content:
+            logger.info(f"📝 [STRIP] Starting markdown strip for URL: {url}")
+            logger.info(f"📝 [STRIP] Input length: {len(markdown_content)} chars")
+
+            if MARKDOWN_STRIP_AVAILABLE:
+                try:
+                    original_length = len(markdown_content)
+                    markdown_content = strip_markdown(markdown_content)
+                    stripped_length = len(markdown_content)
+                    reduction = ((original_length - stripped_length) / original_length * 100) if original_length > 0 else 0
+
+                    logger.info(f"✅ [STRIP] Markdown strip successful")
+                    logger.info(f"✅ [STRIP] Output length: {stripped_length} chars (reduced {reduction:.1f}%)")
+                    logger.info(f"✅ [STRIP] Removed: links, images, and HTML tags")
+
+                    strip_metadata = {
+                        "markdown_strip": "success",
+                        "original_length": original_length,
+                        "stripped_length": stripped_length
+                    }
+                except Exception as e:
+                    logger.error(f"❌ [STRIP] Markdown strip failed: {str(e)}")
+                    strip_metadata = {
+                        "markdown_strip": "failed",
+                        "strip_error": str(e)
+                    }
+            else:
+                logger.warning(f"⚠️  [STRIP] Markdown strip unavailable: markdown-it-py not installed")
+                strip_metadata = {
+                    "markdown_strip": "unavailable",
+                    "strip_error": "markdown-it-py not installed"
                 }
 
         # Metadata
@@ -359,13 +485,18 @@ async def crawl_single_url(
             "url": url,
             "excluded_tags": tags_to_exclude,
             "css_selector": css_selector,
-            **llm_metadata  # Add LLM metadata if available
+            **llm_metadata,  # Add LLM metadata if available
+            **strip_metadata  # Add markdown strip metadata if available
         }
 
         # Simpan ke file jika diminta
         file_path = None
         if save_file and markdown_content:
             file_path = await save_markdown_to_file(markdown_content, url, output_dir)
+            logger.info(f"💾 [SAVE] File saved to: {file_path}")
+
+        logger.info(f"✨ [COMPLETE] Crawl completed for URL: {url}")
+        logger.info(f"✨ [COMPLETE] Final markdown length: {len(markdown_content)} chars")
 
         return CrawlResult(
             url=url,
@@ -377,6 +508,8 @@ async def crawl_single_url(
 
     except Exception as e:
         # Handle error
+        logger.error(f"❌ [ERROR] Crawl failed for URL: {url}")
+        logger.error(f"❌ [ERROR] Error: {str(e)}")
         return CrawlResult(
             url=url,
             markdown="",
@@ -513,7 +646,8 @@ async def crawl_urls(request: CrawlRequest):
     - excluded_tags: (Optional) Custom list HTML tags yang akan di-exclude
     - css_selector: (Optional) CSS selector untuk target specific element (contoh: "article", "#main-content")
     - smart_clean: (Optional) Jika True, gunakan LLM untuk clean markdown post-crawl (default: False)
-    - llm_model: (Optional) Model name (LiteLLM auto-detects provider) (default: claude-3-5-haiku-20241022)
+    - llm_model: (Optional) Model name (LiteLLM auto-detects provider) (default: azure/gpt-5-mini)
+    - markdown_strip: (Optional) Jika True, remove links, images, dan HTML dari markdown (default: False)
 
     Returns:
     - results: List hasil crawling untuk setiap URL
@@ -526,9 +660,9 @@ async def crawl_urls(request: CrawlRequest):
     - Clean content only: {"urls": ["https://example.com"], "content_only": true}
     - Custom exclusion: {"urls": ["https://example.com"], "excluded_tags": ["nav", "footer"]}
     - Target specific element: {"urls": ["https://example.com"], "css_selector": "article.main"}
-    - Smart clean with Claude: {"urls": ["https://example.com"], "smart_clean": true}
-    - Smart clean with GPT: {"urls": ["https://example.com"], "smart_clean": true, "llm_model": "gpt-4o-mini"}
-    - Smart clean with Gemini: {"urls": ["https://example.com"], "smart_clean": true, "llm_model": "gemini-pro"}
+    - Smart clean with LLM: {"urls": ["https://example.com"], "smart_clean": true}
+    - Full 3-stage pipeline: {"urls": ["https://example.com"], "content_only": true, "smart_clean": true, "markdown_strip": true}
+    - Markdown strip only: {"urls": ["https://example.com"], "markdown_strip": true}
     """
     # Initialize crawler
     async with AsyncWebCrawler(verbose=False) as crawler:
@@ -543,7 +677,8 @@ async def crawl_urls(request: CrawlRequest):
                 excluded_tags=request.excluded_tags,
                 css_selector=request.css_selector,
                 smart_clean=request.smart_clean,
-                llm_model=request.llm_model
+                llm_model=request.llm_model,
+                markdown_strip=request.markdown_strip
             )
             for url in request.urls
         ]
